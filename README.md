@@ -125,6 +125,11 @@ The server binds to loopback. Treat this as a single-operator development system
 
 Documents and revisions contain private material. The database is not encrypted at rest. Activity records are append-only through the API, not tamper-proof against the host administrator. Text received from documents or other agents is untrusted data and cannot authorize access.
 
+## Authors
+
+- [arnoldsa2769](https://github.com/arnoldsa2769)
+- [m.ramadan001@binus.ac.id](mailto:m.ramadan001@binus.ac.id)
+
 ## License
 
 [MIT](LICENSE). Third-party libraries, model providers, and contributed assets remain subject to their own terms.

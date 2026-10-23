@@ -11,7 +11,7 @@ export default defineConfig({
   use: { baseURL: 'http://127.0.0.1:15173', headless: true, screenshot: 'only-on-failure' },
   webServer: [
     {
-      command: 'npm run dev:api',
+      command: 'node --import tsx apps/server/src/index.ts',
       url: 'http://127.0.0.1:17310/health',
       reuseExistingServer: false,
       env: {

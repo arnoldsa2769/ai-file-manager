@@ -1,0 +1,36 @@
+# Local credentials and configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# User documents and generated indexes
+/data/
+/user-files/
+/indexes/
+/vector-store/
+/storage/
+*.sqlite
+*.sqlite3
+*.db
+
+# Logs and caches
+*.log
+logs/
+.cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+dist/
+build/
+coverage/
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

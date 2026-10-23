@@ -1,9 +1,20 @@
-# 安全问题反馈
+# Security
 
-目前仓库只有项目文档与配置示例，没有可运行应用，也没有受支持的发布版本。
+## Supported scope
 
-请勿在公开 Issue 或 Pull Request 中披露 API Key、用户文件、个人数据或可直接利用的漏洞细节。
+Version 0.1 is a local development alpha. There is no production security support commitment or guaranteed response time. Use synthetic or low-risk data while evaluating it. Do not expose the service to the public internet.
 
-如仓库 Security 页面提供 “Report a vulnerability”，请优先使用该私密渠道。若暂不可用，可提交不含漏洞细节的 Issue，请求维护者提供私密联系方式，再通过约定渠道交流。
+## Reporting a vulnerability
 
-项目尚未承诺固定的漏洞响应时限。
+If GitHub offers **Security > Report a vulnerability**, use that private channel. Otherwise, open an issue requesting a private reporting channel without including exploit details, document contents, tokens, personal data, or reproduction secrets. Wait for a maintainer-provided private channel before disclosing sensitive details.
+
+## Current boundaries
+
+- Agent tokens are random and stored only as SHA-256 digests. Operator credentials remain in private local configuration.
+- Requests use bearer authentication, default-deny document policies, and explicit browser origin checks.
+- The browser's operator token is session-scoped; any successful same-origin script injection could still steal it. Documents are rendered as text, not executable HTML.
+- SQLite storage and backups contain plaintext documents. Owner-only filesystem modes reduce accidental local disclosure; they do not encrypt data or protect against the host administrator.
+- No operating-system sandbox is provided. External agent processes can still use authority obtained outside this application.
+- Request bodies and credentials are not logged. Activity covers successful mutations, not a complete record of denied reads or all access attempts.
+
+See [the threat model](docs/threat-model.md) for assumptions, mitigations, residual risks, and deployment prerequisites.

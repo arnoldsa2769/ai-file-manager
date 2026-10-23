@@ -1,0 +1,9 @@
+package-lock.json
+node_modules
+dist
+apps/web/dist
+data
+.superpowers
+.impeccable
+test-results
+playwright-report

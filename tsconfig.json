@@ -1,0 +1,19 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist",
+    "rootDir": ".",
+    "declaration": true,
+    "sourceMap": true,
+    "noUncheckedIndexedAccess": true,
+    "forceConsistentCasingInFileNames": true,
+    "lib": ["ES2024"]
+  },
+  "include": ["packages/**/*.ts", "apps/server/**/*.ts", "scripts/**/*.ts", "examples/**/*.ts"],
+  "exclude": ["node_modules", "dist", "apps/web"]
+}

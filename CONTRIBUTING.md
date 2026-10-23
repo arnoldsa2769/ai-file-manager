@@ -1,18 +1,26 @@
-# 参与贡献
+# Contributing
 
-感谢关注 AI File Manager。项目目前处于筹备阶段，欢迎先从需求讨论、文档和方案建议开始。
+AI File Manager is an early research and development project focused on explicit boundaries between collaborating AI agents.
 
-## 提交建议或问题
+## Before proposing a feature
 
-请在 Issues 中描述实际场景、期望结果以及现有办法的不足。不要上传真实个人文件、密钥或其他敏感信息；必要时使用虚构样例。
+Describe the concrete collaboration problem, affected trust boundary, expected API behavior, and recovery path. Discuss changes to identity, permissions, storage, or protocol compatibility in an issue before implementation.
 
-## 提交改动
+## Local development
 
-1. 较大的功能或技术选型先通过 Issue 讨论。
-2. Fork 仓库并创建分支。
-3. 保持改动集中，说明改动目的和验证方式。
-4. 提交 Pull Request，关联对应 Issue。
+Use Node.js >=22.13. Run `npm ci`, `npm run setup`, and `npm run dev`. Demo data is optional and synthetic. Never submit `.env`, database files, real documents, agent credentials, or provider API keys.
 
-当前尚未确定技术栈，因此没有统一的构建或测试命令。引入可运行代码时，请同时补充运行说明和适当的验证方式。
+Keep policy decisions in `packages/core`; transports and UI are consumers. Write meaningful regression tests for authorization failures, data loss, revision conflicts, and cross-domain leakage. Tests should exercise real SQLite and HTTP behavior where practical.
 
-贡献须为你有权提交的内容。除另有明确说明外，提交的贡献按本项目 Apache-2.0 协议提供。
+## Pull requests
+
+1. Create a focused branch and explain the user-visible behavior.
+2. Add a failing behavioral test for new domain behavior or a bug, then implement it.
+3. Run `npm run format`, `npm run typecheck`, `npm test`, `npm run build`, and `npm run language-check`.
+4. Run browser tests when changing the console or its workflows.
+5. Document API changes and update an architectural decision record when changing a trust boundary.
+6. Describe validation and remaining limitations in English.
+
+All repository-authored documentation, comments, examples, UI copy, issue templates, and commit messages must be English. The language check catches CJK text; it is not a substitute for editorial review of other languages. Valid user document content is not restricted to English.
+
+Submit only content you have the right to contribute. Unless explicitly stated otherwise, contributions are provided under the project's MIT license. Keep discussion respectful and focused on reproducible behavior.

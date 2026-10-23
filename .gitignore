@@ -34,3 +34,11 @@ coverage/
 Thumbs.db
 .idea/
 .vscode/
+
+# Local execution and design scratch
+.superpowers/
+.impeccable/
+playwright-report/
+test-results/
+*.db-wal
+*.db-shm

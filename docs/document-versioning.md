@@ -6,6 +6,12 @@ An applied operation creates a unique revision with workspace, path, content or 
 
 Snapshots deliberately favor simple recovery and exact review over compact storage. Large workspaces will require retention and storage policies before adoption.
 
+## Reading an exact revision
+
+Use `GET /v1/workspaces/:workspaceId/revision?path=...&revisionId=...` or `client.revision(workspaceId, path, revisionId)` when a proposal already identifies its base. This returns one immutable snapshot without transferring unrelated history. The workspace, canonical path, and revision ID must all match. Tombstones can be read by the same endpoint.
+
+Current read permission is required even for an old revision, and a revision ID never grants authority. Unreadable paths return `FORBIDDEN`; a missing revision or a revision belonging to another document returns `NOT_FOUND`. Full history remains available for explicit history browsing and restoration.
+
 ## Optimistic concurrency
 
 An agent edits a specific base revision. The apply transaction compares that revision to the current head. If another proposal has advanced the head, application fails with `REVISION_CONFLICT` and commits nothing.

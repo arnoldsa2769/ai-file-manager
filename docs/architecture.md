@@ -20,7 +20,7 @@ AI tools ──────┘                       │
                                    SQLite
 ```
 
-The MCP bridge exposes eight narrow tools. It has no shell command, arbitrary host file operation, approval, or apply tool. Model inference remains with external clients; a connected model does not become an operator.
+The MCP bridge exposes nine narrow tools, including exact historical revision reads. It has no shell command, arbitrary host file operation, approval, or apply tool. Model inference remains with external clients; a connected model does not become an operator.
 
 ## Persistence model
 
@@ -51,6 +51,8 @@ Short synchronous database operations make this sequence straightforward in one 
 React and Vite provide the administration console. Development uses an explicit loopback proxy; production serves the built assets from the API origin. No server-side rendering is needed for an authenticated local workbench. Document text is rendered using React text nodes, not HTML.
 
 The console supports empty workspaces as well as an explicitly seeded synthetic demonstration. UI counters come from persisted state. History responses are associated with their requested document, preventing late responses from becoming restore operations on a different file.
+
+Change review reads each exact base revision through the scoped revision endpoint instead of downloading complete histories. Snapshot failures keep approval and application disabled and offer an explicit retry. Switching proposals discards late snapshot responses.
 
 ## Scaling boundary
 

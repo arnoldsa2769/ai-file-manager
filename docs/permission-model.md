@@ -40,6 +40,8 @@ Requiring read for a write prevents an agent from proposing edits to an unreadab
 
 Expiration uses the service host's clock. Keep it accurate. Author permissions are checked during proposal and again during application. Approval never freezes access rights. When a grant expires or is revoked, an approved change may fail to apply without changing its approved status or any document.
 
+Within one synchronous service operation, path and action checks share a single grant read and evaluation timestamp. That snapshot is discarded at the end of the operation. Each later operation reloads current grants and verifies the active identity; application does so inside its immediate transaction. There is no cross-request authorization cache.
+
 The operator is trusted and can read every local workspace. Giving an agent the operator token defeats scoped access. Never share that token in task instructions, model prompts, or MCP settings.
 
 ## Canonical paths

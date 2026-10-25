@@ -18,7 +18,9 @@ const client = new WorkspaceClient({
 const documents = await client.documents(process.env.AFM_WORKSPACE!);
 ```
 
-The client supports document reads/history, proposals, review notes, tasks, identity inspection, and structured requests to `/v1` routes. `WorkspaceApiError` retains `code` and `status`. Requests have a bounded timeout and reject redirects rather than forwarding credentials through them.
+The client supports document reads/history, exact revision reads, proposals, review notes, tasks, identity inspection, and structured requests to `/v1` routes. `WorkspaceApiError` retains `code` and `status`. Requests have a bounded timeout and reject redirects rather than forwarding credentials through them.
+
+When a proposal names a base revision, call `client.revision(workspaceId, path, revisionId)` to fetch that single snapshot. Full `client.history(workspaceId, path)` remains available for browsing. Both require current read authority on the document, including after deletion.
 
 Run `npm run example` after optional demo seeding to exercise two independent clients without a model key. A real framework uses the same calls around its own inference and tool selection logic.
 
@@ -63,6 +65,7 @@ The bridge writes protocol messages to stdout and exposes:
 | list_documents   | List readable current documents                              |
 | read_document    | Read permitted text                                          |
 | document_history | Inspect permitted revisions                                  |
+| read_revision    | Read one permitted snapshot using `path` and `revisionId`    |
 | propose_changes  | Submit immutable proposals                                   |
 | get_change       | Inspect an owned/readable or permitted review proposal by ID |
 | review_change    | Add advisory review notes                                    |

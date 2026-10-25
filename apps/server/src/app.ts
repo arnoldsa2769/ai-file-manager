@@ -170,6 +170,13 @@ export async function createApp(options: AppOptions) {
         const q = z.object({ path: z.string() }).strict().parse(r.query);
         return s.history(r.principal, params(r.params).workspaceId, q.path);
       });
+      api.get('/workspaces/:workspaceId/revision', async (r) => {
+        const q = z
+          .object({ path: z.string(), revisionId: z.string().min(1).max(200) })
+          .strict()
+          .parse(r.query);
+        return s.revision(r.principal, params(r.params).workspaceId, q.path, q.revisionId);
+      });
       api.get('/workspaces/:workspaceId/changes', async (r) =>
         s.listChanges(r.principal, params(r.params).workspaceId),
       );

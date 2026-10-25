@@ -67,15 +67,17 @@ function ChangeDetail({ change }: { change: ChangeSet }) {
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let active = true;
     setLoaded(false);
+    setError('');
     void Promise.all([
       Promise.all(
         change.operations.map(async (op) => ({
           path: op.path,
           revision: op.baseRevision
-            ? (await client.history(wid, op.path)).find((r) => r.id === op.baseRevision)
+            ? await client.revision(wid, op.path, op.baseRevision)
             : undefined,
         })),
       ),
@@ -94,7 +96,7 @@ function ChangeDetail({ change }: { change: ChangeSet }) {
     return () => {
       active = false;
     };
-  }, [client, wid, change.id]);
+  }, [client, wid, change.id, attempt]);
   const author =
     change.authorId === 'operator'
       ? 'Operator'
@@ -116,37 +118,42 @@ function ChangeDetail({ change }: { change: ChangeSet }) {
         <code>{change.digest}</code>
       </div>
       {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
+        <div>
+          <p role="alert" className="error">
+            {error}
+          </p>
+          <button className="secondary" onClick={() => setAttempt((value) => value + 1)}>
+            Retry snapshots
+          </button>
+        </div>
       )}
-      {!loaded ? (
-        <p role="status">Loading exact revision snapshots...</p>
-      ) : (
-        change.operations.map((op) => (
-          <section className="diff" key={op.path}>
-            <div className="diff-heading">
-              <code>{op.path}</code>
-              <span>{op.content === null ? 'Delete' : op.baseRevision ? 'Update' : 'Create'}</span>
-            </div>
-            <div className="diff-columns">
-              <div>
-                <h3>Before · {op.baseRevision ? short(op.baseRevision) : 'new document'}</h3>
-                <pre>
-                  {bases[op.path]?.deleted
-                    ? 'Deletion tombstone'
-                    : (bases[op.path]?.content ??
-                      (op.baseRevision ? 'Base revision unavailable.' : 'No previous content.'))}
-                </pre>
+      {!loaded
+        ? !error && <p role="status">Loading exact revision snapshots...</p>
+        : change.operations.map((op) => (
+            <section className="diff" key={op.path}>
+              <div className="diff-heading">
+                <code>{op.path}</code>
+                <span>
+                  {op.content === null ? 'Delete' : op.baseRevision ? 'Update' : 'Create'}
+                </span>
               </div>
-              <div>
-                <h3>Proposed</h3>
-                <pre>{op.content ?? 'Document will be deleted.'}</pre>
+              <div className="diff-columns">
+                <div>
+                  <h3>Before · {op.baseRevision ? short(op.baseRevision) : 'new document'}</h3>
+                  <pre>
+                    {bases[op.path]?.deleted
+                      ? 'Deletion tombstone'
+                      : (bases[op.path]?.content ??
+                        (op.baseRevision ? 'Base revision unavailable.' : 'No previous content.'))}
+                  </pre>
+                </div>
+                <div>
+                  <h3>Proposed</h3>
+                  <pre>{op.content ?? 'Document will be deleted.'}</pre>
+                </div>
               </div>
-            </div>
-          </section>
-        ))
-      )}
+            </section>
+          ))}
       <div className="approval-bar">
         {change.status === 'pending' && (
           <button

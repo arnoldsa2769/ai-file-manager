@@ -17,7 +17,7 @@ AI File Manager explores how independent AI tools can collaborate on documents w
 - Recheck current authority and revision heads before an atomic transaction.
 - Preserve revisions and deletion tombstones; restore through new proposals.
 - Coordinate task assignment and handoffs without transferring permissions.
-- Integrate through REST, a TypeScript client, CLI, and eight MCP tools.
+- Integrate through REST, a TypeScript client, CLI, and nine MCP tools.
 
 The service does not call an LLM. Your connected agents run their own models and use the same permission boundary, regardless of provider or framework.
 

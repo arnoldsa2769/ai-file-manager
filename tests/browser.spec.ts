@@ -1,5 +1,68 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type APIRequestContext } from '@playwright/test';
 const token = 'browser-test-operator-token-at-least-24';
+async function reviewFixture(request: APIRequestContext) {
+  const headers = { Authorization: `Bearer ${token}` };
+  const base = 'http://127.0.0.1:17310/v1/workspaces';
+  const workspace = await (
+    await request.post(base, { headers, data: { name: 'Exact revision review' } })
+  ).json();
+  const root = `${base}/${workspace.id}`;
+  async function propose(
+    title: string,
+    path: string,
+    baseRevision: string | null,
+    content: string,
+  ) {
+    return (
+      await request.post(`${root}/changes`, {
+        headers,
+        data: { title, operations: [{ path, baseRevision, content }] },
+      })
+    ).json();
+  }
+  async function publish(
+    title: string,
+    path: string,
+    baseRevision: string | null,
+    content: string,
+  ) {
+    const change = await propose(title, path, baseRevision, content);
+    expect(
+      (await request.post(`${root}/changes/${change.id}/approve`, { headers, data: {} })).ok(),
+    ).toBe(true);
+    expect(
+      (await request.post(`${root}/changes/${change.id}/apply`, { headers, data: {} })).ok(),
+    ).toBe(true);
+    return (
+      await request.get(`${root}/document?path=${encodeURIComponent(path)}`, { headers })
+    ).json();
+  }
+  const original = await publish('Original A', '/drafts/a.md', null, 'Exact historical A');
+  const other = await publish('Original B', '/drafts/b.md', null, 'Independent historical B');
+  const first = await propose(
+    'Review historical A',
+    '/drafts/a.md',
+    original.currentRevision,
+    'Proposed A',
+  );
+  const second = await propose(
+    'Review historical B',
+    '/drafts/b.md',
+    other.currentRevision,
+    'Proposed B',
+  );
+  let head = original.currentRevision;
+  for (let index = 0; index < 8; index++) {
+    const current = await publish(
+      `Advance A ${index}`,
+      '/drafts/a.md',
+      head,
+      `Unrelated later revision ${index}\n${'x'.repeat(4096)}`,
+    );
+    head = current.currentRevision;
+  }
+  return { workspace, root, headers, first, second, original, propose };
+}
 test('operator reviews and applies an agent change then inspects history on desktop and mobile', async ({
   page,
   request,
@@ -161,4 +224,142 @@ test('rejected proposals and grants explain failures inside the active dialog', 
   await grant.getByRole('button', { name: 'Save grant' }).click();
   await expect(grant).not.toBeVisible();
   await expect(page.getByText('Scoped grant created.', { exact: true })).toBeVisible();
+});
+
+test('change review loads only exact historical snapshots instead of complete history', async ({
+  page,
+  request,
+}, testInfo) => {
+  const { workspace, root, headers } = await reviewFixture(request);
+  const fullHistory = await (
+    await request.get(`${root}/history?path=%2Fdrafts%2Fa.md`, { headers })
+  ).body();
+  const historyRequests: string[] = [];
+  const revisionBodies: Promise<Buffer>[] = [];
+  page.on('request', (r) => {
+    if (new URL(r.url()).pathname.endsWith('/history')) historyRequests.push(r.url());
+  });
+  page.on('response', (r) => {
+    if (new URL(r.url()).pathname.endsWith('/revision')) revisionBodies.push(r.body());
+  });
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspace.id);
+  await page.getByRole('button', { name: 'Change sets', exact: true }).click();
+  await page.getByRole('button', { name: 'Review historical A', exact: false }).click();
+  await expect(page.getByText('Exact historical A', { exact: true })).toBeVisible();
+  await expect(page.getByText('Proposed A', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Approve change', exact: true })).toBeEnabled();
+  expect(historyRequests).toHaveLength(0);
+  const bodies = await Promise.all(revisionBodies);
+  expect(bodies.length).toBeGreaterThan(0);
+  expect(bodies.length).toBeLessThanOrEqual(2); // Development StrictMode may repeat the initial effect.
+  const exactBytes = bodies.reduce((total, body) => total + body.length, 0);
+  expect(exactBytes).toBeLessThan(fullHistory.length / 10);
+  await testInfo.attach('revision-transfer.json', {
+    body: JSON.stringify({ historyBytes: fullHistory.length, exactRevisionBytes: exactBytes }),
+    contentType: 'application/json',
+  });
+  await page.screenshot({
+    path: 'test-results/exact-revision-review.png',
+    fullPage: true,
+    animations: 'disabled',
+  });
+});
+
+test('late exact snapshots cannot replace another selected proposal', async ({ page, request }) => {
+  const { workspace } = await reviewFixture(request);
+  let release!: () => void;
+  const delayed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let reached!: () => void;
+  const requested = new Promise<void>((resolve) => {
+    reached = resolve;
+  });
+  await page.route('**/revision?path=%2Fdrafts%2Fa.md&revisionId=*', async (route) => {
+    const response = await route.fetch();
+    reached();
+    await delayed;
+    await route.fulfill({ response });
+  });
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspace.id);
+  await page.getByRole('button', { name: 'Change sets', exact: true }).click();
+  await page.getByRole('button', { name: 'Review historical A', exact: false }).click();
+  await requested;
+  await expect(page.getByRole('button', { name: 'Approve change', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Review historical B', exact: false }).click();
+  await expect(page.getByText('Independent historical B', { exact: true })).toBeVisible();
+  const lateResponse = page.waitForResponse(
+    (r) =>
+      new URL(r.url()).pathname.endsWith('/revision') &&
+      new URL(r.url()).searchParams.get('path') === '/drafts/a.md',
+  );
+  release();
+  await (await lateResponse).finished();
+  await expect(page.getByText('Independent historical B', { exact: true })).toBeVisible();
+  await expect(page.getByText('Exact historical A', { exact: true })).not.toBeVisible();
+  await expect(page.getByText('Proposed B', { exact: true })).toBeVisible();
+});
+
+test('unavailable base revisions fail closed and allow snapshot retries', async ({
+  page,
+  request,
+}) => {
+  const { workspace, root, headers, first } = await reviewFixture(request);
+  let recover = false;
+  await page.route('**/revision?path=%2Fdrafts%2Fa.md&revisionId=*', async (route) => {
+    if (!recover)
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: { code: 'TEMPORARY_FAILURE', message: 'Snapshot temporarily unavailable.' },
+        }),
+      });
+    else await route.continue();
+  });
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspace.id);
+  await page.getByRole('button', { name: 'Change sets', exact: true }).click();
+  await page.getByRole('button', { name: 'Review historical A', exact: false }).click();
+  await expect(page.getByRole('alert')).toContainText('Snapshot temporarily unavailable.');
+  await expect(page.getByRole('button', { name: 'Approve change', exact: true })).toBeDisabled();
+  await expect(page.getByText('Loading exact revision snapshots...')).not.toBeVisible();
+  expect(
+    (await (await request.get(`${root}/changes/${first.id}`, { headers })).json()).status,
+  ).toBe('pending');
+  recover = true;
+  await page.getByRole('button', { name: 'Retry snapshots', exact: true }).click();
+  await expect(page.getByText('Exact historical A', { exact: true })).toBeVisible();
+  await expect(page.getByRole('alert')).not.toBeVisible();
+  await expect(page.getByRole('button', { name: 'Approve change', exact: true })).toBeEnabled();
+});
+
+test('padded opaque base IDs never enable approval through revision normalization', async ({
+  page,
+  request,
+}) => {
+  const { workspace, original, propose } = await reviewFixture(request);
+  await propose(
+    'Padded base ID',
+    '/drafts/a.md',
+    ` ${original.currentRevision} `,
+    'Must stay unapproved',
+  );
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspace.id);
+  await page.getByRole('button', { name: 'Change sets', exact: true }).click();
+  await page.getByRole('button', { name: 'Padded base ID', exact: false }).click();
+  await expect(page.getByRole('alert')).toContainText('surrounding whitespace');
+  await expect(page.getByRole('button', { name: 'Approve change', exact: true })).toBeDisabled();
+  await expect(page.getByText('Exact historical A', { exact: true })).not.toBeVisible();
 });

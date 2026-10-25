@@ -22,6 +22,7 @@ import {
 const now = () => new Date().toISOString();
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 const agentColumns = 'id, workspaceId, name, domain, provider, revokedAt, createdAt';
+type AccessCheck = (action: Action, path: string) => boolean;
 function fail(code: string, message: string, status = 400): never {
   throw new DomainError(code, message, status);
 }
@@ -114,11 +115,14 @@ export class WorkspaceService {
   private grants(wid: string, agentId: string): Grant[] {
     return this.all<Grant>('SELECT * FROM grants WHERE workspaceId=? AND agentId=?', wid, agentId);
   }
-  private can(p: Principal, wid: string, action: Action, path: string): boolean {
-    return p.kind === 'operator' || allowed(this.grants(wid, p.id), action, path);
+  private access(p: Principal, wid: string): AccessCheck {
+    if (p.kind === 'operator') return () => true;
+    const grants = this.grants(wid, p.id);
+    const evaluatedAt = new Date();
+    return (action, path) => allowed(grants, action, path, evaluatedAt);
   }
-  private require(p: Principal, wid: string, action: Action, path: string): void {
-    if (!this.can(p, wid, action, path))
+  private require(can: AccessCheck, action: Action, path: string): void {
+    if (!can(action, path))
       fail('FORBIDDEN', 'The requested document operation is not permitted.', 403);
   }
   authenticateAgent(token: string): Principal | null {
@@ -237,15 +241,16 @@ export class WorkspaceService {
   }
   listDocuments(p: Principal, wid: string): Document[] {
     this.workspace(p, wid);
+    const can = this.access(p, wid);
     return this.all<Document>(
       'SELECT * FROM documents WHERE workspaceId=? AND deleted=0 ORDER BY path',
       wid,
-    ).filter((d) => this.can(p, wid, 'read', d.path));
+    ).filter((d) => can('read', d.path));
   }
   readDocument(p: Principal, wid: string, path: string, includeDeleted = false): Document {
     this.workspace(p, wid);
     canonicalPath(path);
-    this.require(p, wid, 'read', path);
+    this.require(this.access(p, wid), 'read', path);
     const doc = this.one<Document>(
       'SELECT * FROM documents WHERE workspaceId=? AND path=?',
       wid,
@@ -257,18 +262,35 @@ export class WorkspaceService {
   history(p: Principal, wid: string, path: string): Revision[] {
     this.workspace(p, wid);
     canonicalPath(path);
-    this.require(p, wid, 'read', path);
+    this.require(this.access(p, wid), 'read', path);
     return this.all<Revision>(
       'SELECT * FROM revisions WHERE workspaceId=? AND path=? ORDER BY rowid DESC',
       wid,
       path,
     );
   }
+  revision(p: Principal, wid: string, path: string, revisionId: string): Revision {
+    this.workspace(p, wid);
+    canonicalPath(path);
+    this.require(this.access(p, wid), 'read', path);
+    const id = text(revisionId, 'Revision ID', 200);
+    if (id !== revisionId)
+      fail('INVALID_INPUT', 'Revision ID must not have surrounding whitespace.');
+    return (
+      this.one<Revision>(
+        'SELECT * FROM revisions WHERE workspaceId=? AND path=? AND id=?',
+        wid,
+        path,
+        id,
+      ) ?? fail('NOT_FOUND', 'Revision not found for this document.', 404)
+    );
+  }
   private authorizeOperations(p: Principal, wid: string, operations: Operation[]): void {
     this.workspace(p, wid);
+    const can = this.access(p, wid);
     for (const op of operations) {
-      this.require(p, wid, 'read', op.path);
-      this.require(p, wid, op.content === null ? 'delete' : 'write', op.path);
+      this.require(can, 'read', op.path);
+      this.require(can, op.content === null ? 'delete' : 'write', op.path);
     }
   }
   propose(p: Principal, wid: string, input: { title: string; operations: Operation[] }): ChangeSet {
@@ -323,23 +345,28 @@ export class WorkspaceService {
     );
   }
   getChange(p: Principal, wid: string, id: string): ChangeSet {
+    return this.inspectChange(p, wid, id);
+  }
+  private inspectChange(p: Principal, wid: string, id: string, review = false): ChangeSet {
     this.workspace(p, wid);
     const change = this.rawChange(wid, id);
-    if (p.kind === 'agent' && change.authorId !== p.id) {
-      for (const op of change.operations) this.require(p, wid, 'review', op.path);
+    const can = this.access(p, wid);
+    if (review || (p.kind === 'agent' && change.authorId !== p.id)) {
+      for (const op of change.operations) this.require(can, 'review', op.path);
     }
-    for (const op of change.operations) this.require(p, wid, 'read', op.path);
+    for (const op of change.operations) this.require(can, 'read', op.path);
     return change;
   }
   listChanges(p: Principal, wid: string): ChangeSet[] {
     this.workspace(p, wid);
+    const can = this.access(p, wid);
     return this.all<ChangeSet>(
       'SELECT * FROM changes WHERE workspaceId=? ORDER BY rowid DESC',
       wid,
     ).filter(
       (c) =>
         p.kind === 'operator' ||
-        (c.authorId === p.id && c.operations.every((op) => this.can(p, wid, 'read', op.path))),
+        (c.authorId === p.id && c.operations.every((op) => can('read', op.path))),
     );
   }
   approve(p: Principal, wid: string, id: string): ChangeSet {
@@ -433,8 +460,7 @@ export class WorkspaceService {
       .immediate();
   }
   addReview(p: Principal, wid: string, id: string, body: string): Review {
-    const change = this.getChange(p, wid, id);
-    for (const op of change.operations) this.require(p, wid, 'review', op.path);
+    this.inspectChange(p, wid, id, true);
     const review: Review = {
       id: randomUUID(),
       workspaceId: wid,

@@ -86,6 +86,12 @@ export class WorkspaceClient {
       `${this.root(wid)}/history?path=${encodeURIComponent(path)}`,
     );
   }
+  revision(wid: string, path: string, revisionId: string) {
+    return this.request<Revision>(
+      'GET',
+      `${this.root(wid)}/revision?path=${encodeURIComponent(path)}&revisionId=${encodeURIComponent(revisionId)}`,
+    );
+  }
   propose(wid: string, title: string, operations: Operation[]) {
     return this.request<ChangeSet>('POST', `${this.root(wid)}/changes`, { title, operations });
   }

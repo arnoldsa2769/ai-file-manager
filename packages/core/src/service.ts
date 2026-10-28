@@ -2,6 +2,8 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { openDatabase } from './database.js';
 import { allowed, canonicalPath } from './policy.js';
+import { idempotent } from './idempotency.js';
+import { readPage, validatePageOptions } from './pagination.js';
 import {
   DomainError,
   type Action,
@@ -17,6 +19,11 @@ import {
   type Revision,
   type Task,
   type Workspace,
+  type WorkspaceSummary,
+  type Collection,
+  type Collections,
+  type Page,
+  type PageOptions,
 } from './types.js';
 
 const now = () => new Date().toISOString();
@@ -293,7 +300,12 @@ export class WorkspaceService {
       this.require(can, op.content === null ? 'delete' : 'write', op.path);
     }
   }
-  propose(p: Principal, wid: string, input: { title: string; operations: Operation[] }): ChangeSet {
+  propose(
+    p: Principal,
+    wid: string,
+    input: { title: string; operations: Operation[] },
+    key?: string,
+  ): ChangeSet {
     this.workspace(p, wid);
     const title = text(input.title, 'Change title', 200);
     if (
@@ -319,24 +331,26 @@ export class WorkspaceService {
       return { path: op.path, baseRevision: op.baseRevision, content: op.content };
     });
     this.authorizeOperations(p, wid, operations);
-    const change: ChangeSet = {
-      id: randomUUID(),
-      workspaceId: wid,
-      title,
-      authorId: p.id,
-      operations,
-      digest: hash(JSON.stringify({ title, authorId: p.id, operations })),
-      approvedDigest: null,
-      status: 'pending',
-      createdAt: now(),
-      approvedAt: null,
-      appliedAt: null,
-    };
-    this.db.transaction(() => {
-      this.insert('changes', change);
-      this.record(p, wid, 'change.proposed', change.id, { paths: operations.map((o) => o.path) });
-    })();
-    return change;
+    return idempotent(this.db, p, wid, key, 'propose', { title, operations }, () => {
+      const change: ChangeSet = {
+        id: randomUUID(),
+        workspaceId: wid,
+        title,
+        authorId: p.id,
+        operations,
+        digest: hash(JSON.stringify({ title, authorId: p.id, operations })),
+        approvedDigest: null,
+        status: 'pending',
+        createdAt: now(),
+        approvedAt: null,
+        appliedAt: null,
+      };
+      this.db.transaction(() => {
+        this.insert('changes', change);
+        this.record(p, wid, 'change.proposed', change.id, { paths: operations.map((o) => o.path) });
+      })();
+      return change;
+    });
   }
   private rawChange(wid: string, id: string): ChangeSet {
     return (
@@ -395,69 +409,71 @@ export class WorkspaceService {
     })();
     return this.rawChange(wid, id);
   }
-  apply(p: Principal, wid: string, id: string): ChangeSet {
+  apply(p: Principal, wid: string, id: string, key?: string): ChangeSet {
     this.admin(p);
     this.workspace(p, wid);
-    return this.db
-      .transaction(() => {
-        const change = this.rawChange(wid, id);
-        if (change.status !== 'approved')
-          fail('INVALID_STATE', 'Approve the change before applying it.', 409);
-        const digest = hash(
-          JSON.stringify({
-            title: change.title,
-            authorId: change.authorId,
-            operations: change.operations,
-          }),
-        );
-        if (digest !== change.digest || digest !== change.approvedDigest)
-          fail('APPROVAL_MISMATCH', 'Approved content no longer matches this change.', 409);
-        const author: Principal =
-          change.authorId === 'operator'
-            ? { kind: 'operator', id: 'operator' }
-            : { kind: 'agent', id: change.authorId, workspaceId: wid };
-        this.authorizeOperations(author, wid, change.operations);
-        for (const op of change.operations) {
-          const current = this.one<Document>(
-            'SELECT * FROM documents WHERE workspaceId=? AND path=?',
-            wid,
-            op.path,
+    return idempotent(this.db, p, wid, key, 'apply', { id }, () =>
+      this.db
+        .transaction(() => {
+          const change = this.rawChange(wid, id);
+          if (change.status !== 'approved')
+            fail('INVALID_STATE', 'Approve the change before applying it.', 409);
+          const digest = hash(
+            JSON.stringify({
+              title: change.title,
+              authorId: change.authorId,
+              operations: change.operations,
+            }),
           );
-          if ((current?.currentRevision ?? null) !== op.baseRevision)
-            fail('REVISION_CONFLICT', `Document changed since proposal: ${op.path}`, 409);
-          if (op.content === null && (!current || current.deleted))
-            fail('INVALID_CHANGE', 'Cannot delete an absent document.');
-        }
-        const createdAt = now();
-        for (const op of change.operations) {
-          const revision: Revision = {
-            id: randomUUID(),
-            workspaceId: wid,
-            path: op.path,
-            content: op.content,
-            deleted: op.content === null,
-            parentId: op.baseRevision,
-            authorId: change.authorId,
-            changeSetId: id,
-            createdAt,
-          };
-          this.insert('revisions', revision);
+          if (digest !== change.digest || digest !== change.approvedDigest)
+            fail('APPROVAL_MISMATCH', 'Approved content no longer matches this change.', 409);
+          const author: Principal =
+            change.authorId === 'operator'
+              ? { kind: 'operator', id: 'operator' }
+              : { kind: 'agent', id: change.authorId, workspaceId: wid };
+          this.authorizeOperations(author, wid, change.operations);
+          for (const op of change.operations) {
+            const current = this.one<Document>(
+              'SELECT * FROM documents WHERE workspaceId=? AND path=?',
+              wid,
+              op.path,
+            );
+            if ((current?.currentRevision ?? null) !== op.baseRevision)
+              fail('REVISION_CONFLICT', `Document changed since proposal: ${op.path}`, 409);
+            if (op.content === null && (!current || current.deleted))
+              fail('INVALID_CHANGE', 'Cannot delete an absent document.');
+          }
+          const createdAt = now();
+          for (const op of change.operations) {
+            const revision: Revision = {
+              id: randomUUID(),
+              workspaceId: wid,
+              path: op.path,
+              content: op.content,
+              deleted: op.content === null,
+              parentId: op.baseRevision,
+              authorId: change.authorId,
+              changeSetId: id,
+              createdAt,
+            };
+            this.insert('revisions', revision);
+            this.db
+              .prepare(
+                'INSERT INTO documents (workspaceId,path,currentRevision,content,deleted,updatedAt) VALUES (?,?,?,?,?,?) ON CONFLICT(workspaceId,path) DO UPDATE SET currentRevision=excluded.currentRevision,content=excluded.content,deleted=excluded.deleted,updatedAt=excluded.updatedAt',
+              )
+              .run(wid, op.path, revision.id, op.content, Number(revision.deleted), createdAt);
+          }
           this.db
-            .prepare(
-              'INSERT INTO documents (workspaceId,path,currentRevision,content,deleted,updatedAt) VALUES (?,?,?,?,?,?) ON CONFLICT(workspaceId,path) DO UPDATE SET currentRevision=excluded.currentRevision,content=excluded.content,deleted=excluded.deleted,updatedAt=excluded.updatedAt',
-            )
-            .run(wid, op.path, revision.id, op.content, Number(revision.deleted), createdAt);
-        }
-        this.db
-          .prepare('UPDATE changes SET status=?,appliedAt=? WHERE id=?')
-          .run('applied', createdAt, id);
-        this.record(p, wid, 'change.applied', id, {
-          digest,
-          paths: change.operations.map((o) => o.path),
-        });
-        return this.rawChange(wid, id);
-      })
-      .immediate();
+            .prepare('UPDATE changes SET status=?,appliedAt=? WHERE id=?')
+            .run('applied', createdAt, id);
+          this.record(p, wid, 'change.applied', id, {
+            digest,
+            paths: change.operations.map((o) => o.path),
+          });
+          return this.rawChange(wid, id);
+        })
+        .immediate(),
+    );
   }
   addReview(p: Principal, wid: string, id: string, body: string): Review {
     this.inspectChange(p, wid, id, true);
@@ -537,6 +553,40 @@ export class WorkspaceService {
       this.record(p, wid, 'task.updated', id, { assigneeId, status: input.status ?? task.status });
     })();
     return this.one<Task>('SELECT * FROM tasks WHERE id=?', id)!;
+  }
+  summary(p: Principal, wid: string): WorkspaceSummary {
+    this.admin(p);
+    const workspace = this.workspace(p, wid);
+    const count = (table: string, filter = '') =>
+      this.one<{ n: number }>(
+        `SELECT COUNT(*) AS n FROM ${table} WHERE workspaceId=? ${filter}`,
+        wid,
+      )!.n;
+    return {
+      workspace,
+      counts: {
+        documents: count('documents', 'AND deleted=0'),
+        activeAgents: count('agents', 'AND revokedAt IS NULL'),
+        pendingChanges: count('changes', "AND status IN ('pending','approved')"),
+        tasks: count('tasks'),
+      },
+    };
+  }
+  page<K extends Collection>(
+    p: Principal,
+    wid: string,
+    collection: K,
+    options: PageOptions = {},
+  ): Page<Collections[K]> {
+    this.workspace(p, wid);
+    if (['agents', 'grants', 'activity'].includes(collection)) this.admin(p);
+    validatePageOptions(collection, options);
+    const can = this.access(p, wid);
+    if (collection === 'history') {
+      canonicalPath(options.path!);
+      this.require(can, 'read', options.path!);
+    }
+    return readPage(this.db, p, wid, collection, options, can);
   }
   overview(p: Principal, wid: string): Overview {
     this.admin(p);

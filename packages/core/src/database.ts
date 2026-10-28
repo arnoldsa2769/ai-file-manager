@@ -17,7 +17,7 @@ export function openDatabase(path: string): Database.Database {
   db.pragma('journal_mode = WAL');
   db.pragma('busy_timeout = 5000');
   const version = db.pragma('user_version', { simple: true }) as number;
-  if (version > 1) {
+  if (version > 2) {
     db.close();
     throw new Error('Database schema is newer than this application.');
   }
@@ -40,5 +40,30 @@ export function openDatabase(path: string): Database.Database {
       PRAGMA user_version = 1;
     `);
     })();
+  if (version < 2) {
+    try {
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE idempotency (
+            workspaceId TEXT NOT NULL REFERENCES workspaces(id),
+            principalId TEXT NOT NULL,
+            keyHash TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            response TEXT NOT NULL CHECK(json_valid(response)),
+            createdAt TEXT NOT NULL,
+            PRIMARY KEY(workspaceId,principalId,keyHash)
+          );
+          CREATE INDEX changes_workspace ON changes(workspaceId);
+          CREATE INDEX tasks_workspace ON tasks(workspaceId);
+          CREATE INDEX reviews_change ON reviews(workspaceId,changeSetId);
+          CREATE INDEX grants_workspace ON grants(workspaceId);
+          PRAGMA user_version = 2;
+        `);
+      }).immediate();
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+  }
   return db;
 }

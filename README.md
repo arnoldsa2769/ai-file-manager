@@ -17,6 +17,8 @@ AI File Manager explores how independent AI tools can collaborate on documents w
 - Recheck current authority and revision heads before an atomic transaction.
 - Preserve revisions and deletion tombstones; restore through new proposals.
 - Coordinate task assignment and handoffs without transferring permissions.
+- Retry proposals and application with durable, explicitly scoped idempotency keys.
+- Browse metadata in bounded pages and fetch document or proposal text on demand.
 - Integrate through REST, a TypeScript client, CLI, and nine MCP tools.
 
 The service does not call an LLM. Your connected agents run their own models and use the same permission boundary, regardless of provider or framework.
@@ -37,6 +39,8 @@ npm run dev
 Open [http://127.0.0.1:5173](http://127.0.0.1:5173). Read `AFM_ADMIN_TOKEN` from the generated private `.env` and paste it into the sign-in form. Do not share it with agents. The browser keeps it in session storage until sign-out or session termination.
 
 The optional demo creates synthetic documents, three scoped agents, one pending proposal, and a review task. Agent tokens are saved only in ignored `data/demo-agents.json`. Demo seeding is explicit and refuses to repeat against an existing demo workspace.
+
+For an existing installation, back up before starting this revision: the service upgrades SQLite schema 1 to 2 automatically. See [upgrade and rollback instructions](docs/operations.md#schema-and-upgrades).
 
 ## Try the collaboration loop
 
@@ -116,7 +120,7 @@ docs/              Architecture, policy, protocol, operations, and decisions
 - [API reference](docs/api.md)
 - [SDK, CLI, and MCP integration](docs/integrations.md)
 - [Operations and backups](docs/operations.md)
-- [Roadmap](ROADMAP.md)
+- [Changelog](CHANGELOG.md) and [Roadmap](ROADMAP.md)
 - [Contributing](CONTRIBUTING.md) and [security reporting](SECURITY.md)
 
 ## Trust boundaries

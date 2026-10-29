@@ -1,5 +1,442 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 const token = 'browser-test-operator-token-at-least-24';
+async function accessFixture(request: APIRequestContext) {
+  const headers = { Authorization: `Bearer ${token}` };
+  const base = 'http://127.0.0.1:17310/v1/workspaces';
+  const workspace = await (
+    await request.post(base, { headers, data: { name: 'Permission inspection' } })
+  ).json();
+  const root = `${base}/${workspace.id}`;
+  const identity = await (
+    await request.post(`${root}/agents`, {
+      headers,
+      data: { name: 'Scoped writer', domain: 'Drafts', provider: 'External' },
+    })
+  ).json();
+  await request.post(`${root}/grants`, {
+    headers,
+    data: {
+      agentId: identity.agent.id,
+      scope: '/drafts',
+      actions: ['read', 'write'],
+      effect: 'allow',
+    },
+  });
+  const deny = await (
+    await request.post(`${root}/grants`, {
+      headers,
+      data: {
+        agentId: identity.agent.id,
+        scope: '/drafts/private',
+        actions: ['read'],
+        effect: 'deny',
+      },
+    })
+  ).json();
+  return { workspace, identity, deny };
+}
+test('permission inspector explains effective read prerequisites and explicit denies', async ({
+  page,
+  request,
+}) => {
+  const { workspace, identity, deny } = await accessFixture(request);
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspace.id);
+  await page.getByRole('button', { name: 'Permissions', exact: true }).click();
+  await page.getByLabel('Inspect agent', { exact: true }).selectOption(identity.agent.id);
+  await page.getByLabel('Inspect virtual path', { exact: true }).fill('/drafts/private/a.md');
+  await page.getByRole('button', { name: 'Check access', exact: true }).click();
+  const results = page.getByRole('region', { name: 'Access check results', exact: true });
+  await expect(results.getByRole('row').filter({ hasText: 'Propose edits' })).toContainText(
+    'Denied',
+  );
+  await results.getByText('Explain read', { exact: true }).click();
+  await expect(results).toContainText('Explicit deny');
+  await expect(results).toContainText(deny.id);
+  await page.getByLabel('Inspect virtual path', { exact: true }).fill('/drafts/open.md');
+  await expect(results).not.toBeVisible();
+  await page.getByRole('button', { name: 'Check access', exact: true }).click();
+  await expect(results.getByRole('row').filter({ hasText: 'Propose edits' })).toContainText(
+    'Allowed',
+  );
+  await page.screenshot({
+    path: 'test-results/access-inspector-desktop.png',
+    fullPage: true,
+    animations: 'disabled',
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await page.screenshot({
+    path: 'test-results/access-inspector-mobile.png',
+    fullPage: true,
+    animations: 'disabled',
+  });
+});
+test('permission preview retries failures and discards late results after inputs change', async ({
+  page,
+  request,
+}) => {
+  const { workspace } = await accessFixture(request);
+  let recover = false;
+  let release!: () => void;
+  let reached!: () => void;
+  const delayed = new Promise<void>((r) => {
+    release = r;
+  });
+  const requested = new Promise<void>((r) => {
+    reached = r;
+  });
+  await page.route('**/access/check', async (route) => {
+    if (!recover)
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: { code: 'UNAVAILABLE', message: 'Permission preview temporarily unavailable.' },
+        }),
+      });
+    else if (route.request().postDataJSON().checks[0].path === '/drafts/slow.md') {
+      const response = await route.fetch();
+      reached();
+      await delayed;
+      await route.fulfill({ response });
+    } else await route.continue();
+  });
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspace.id);
+  await page.getByRole('button', { name: 'Permissions', exact: true }).click();
+  await page.getByLabel('Inspect virtual path', { exact: true }).fill('/drafts/private/a.md');
+  await page.getByRole('button', { name: 'Check access', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText(
+    'Permission preview temporarily unavailable.',
+  );
+  recover = true;
+  await page.getByRole('button', { name: 'Retry access check', exact: true }).click();
+  const results = page.getByRole('region', { name: 'Access check results', exact: true });
+  await expect(results).toContainText('/drafts/private/a.md');
+  await page.getByLabel('Inspect virtual path', { exact: true }).fill('/drafts/slow.md');
+  await page.getByRole('button', { name: 'Check access', exact: true }).click();
+  await requested;
+  await page.getByLabel('Inspect virtual path', { exact: true }).fill('/drafts/new.md');
+  await page.getByRole('button', { name: 'Check access', exact: true }).click();
+  await expect(results).toContainText('/drafts/new.md');
+  const late = page.waitForResponse(
+    (r) =>
+      new URL(r.url()).pathname.endsWith('/access/check') &&
+      r.request().postDataJSON().checks[0].path === '/drafts/slow.md',
+  );
+  release();
+  await (await late).finished();
+  await expect(results).toContainText('/drafts/new.md');
+  await expect(results).not.toContainText('/drafts/slow.md');
+});
+test('permission inspector clears a selected identity when refresh removes its loaded option', async ({
+  page,
+  request,
+}) => {
+  const { workspace, identity } = await accessFixture(request);
+  const headers = { Authorization: `Bearer ${token}` };
+  for (let index = 0; index < 26; index++) {
+    await request.post(`http://127.0.0.1:17310/v1/workspaces/${workspace.id}/agents`, {
+      headers,
+      data: { name: `New agent ${index}`, domain: 'Other', provider: 'External' },
+    });
+  }
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspace.id);
+  await page.getByRole('button', { name: 'Permissions', exact: true }).click();
+  await page.getByRole('button', { name: 'Load more agents', exact: true }).click();
+  const selector = page.getByLabel('Inspect agent', { exact: true });
+  await selector.selectOption(identity.agent.id);
+  await page.getByRole('button', { name: 'Check access', exact: true }).click();
+  const results = page.getByRole('region', { name: 'Access check results', exact: true });
+  await expect(results).toBeVisible();
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(selector).not.toHaveValue(identity.agent.id);
+  await expect(results).not.toBeVisible();
+  const selected = await selector.inputValue();
+  const checked = page.waitForRequest((r) => new URL(r.url()).pathname.endsWith('/access/check'));
+  await page.getByRole('button', { name: 'Check access', exact: true }).click();
+  expect((await checked).postDataJSON().agentId).toBe(selected);
+  await expect(results).toBeVisible();
+});
+
+async function pagedFixture(request: APIRequestContext) {
+  const headers = { Authorization: `Bearer ${token}` };
+  const base = 'http://127.0.0.1:17310/v1/workspaces';
+  const workspace = await (
+    await request.post(base, { headers, data: { name: 'Paged workspace' } })
+  ).json();
+  const root = `${base}/${workspace.id}`;
+  for (let start = 0; start < 30; start += 15) {
+    const change = await (
+      await request.post(`${root}/changes`, {
+        headers,
+        data: {
+          title: `Seed documents ${start}`,
+          operations: Array.from({ length: 15 }, (_, n) => ({
+            path: `/docs/file-${String(start + n).padStart(2, '0')}.md`,
+            baseRevision: null,
+            content: `LAZY_BODY_${start + n}\n${'x'.repeat(8192)}`,
+          })),
+        },
+      })
+    ).json();
+    await request.post(`${root}/changes/${change.id}/approve`, { headers, data: {} });
+    await request.post(`${root}/changes/${change.id}/apply`, { headers, data: {} });
+  }
+  return { workspace, root, headers };
+}
+
+test('console loads metadata pages, searches across unloaded documents, and fetches selected bodies only', async ({
+  page,
+  request,
+}, testInfo) => {
+  const { workspace, root, headers } = await pagedFixture(request);
+  const legacyBytes = (await (await request.get(`${root}/overview`, { headers })).body()).length;
+  const forbidden: string[] = [];
+  const bodies: Promise<Buffer>[] = [];
+  const details: string[] = [];
+  page.on('request', (r) => {
+    const path = new URL(r.url()).pathname;
+    if (path.endsWith('/overview') || /\/(documents|changes|history|tasks)$/.test(path))
+      forbidden.push(path);
+    if (path.endsWith('/document')) details.push(path);
+  });
+  page.on('response', (r) => {
+    if (
+      r.url().includes(`/workspaces/${workspace.id}/`) &&
+      (new URL(r.url()).pathname.endsWith('/page') ||
+        new URL(r.url()).pathname.endsWith('/summary'))
+    )
+      bodies.push(r.body());
+  });
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspace.id);
+  await expect(page.getByRole('heading', { name: 'Workspace overview' })).toBeVisible();
+  await page.getByRole('button', { name: 'Documents', exact: true }).click();
+  await expect(page.getByRole('button', { name: '/docs/file-29.md', exact: true })).toBeVisible();
+  expect(forbidden).toEqual([]);
+  expect(details).toEqual([]);
+  await expect(
+    page.getByRole('button', { name: '/docs/file-00.md', exact: true }),
+  ).not.toBeVisible();
+  await page.getByRole('button', { name: 'Load more documents', exact: true }).click();
+  await expect(page.getByRole('button', { name: '/docs/file-00.md', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '/docs/file-00.md', exact: true }).click();
+  await expect(page.locator('.document-content')).toContainText('LAZY_BODY_0');
+  await page.getByLabel('Search documents').fill('file-01');
+  await expect(page.getByRole('button', { name: '/docs/file-01.md', exact: true })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: '/docs/file-29.md', exact: true }),
+  ).not.toBeVisible();
+  const metadata = await Promise.all(bodies);
+  expect(metadata.every((b) => !b.toString().includes('LAZY_BODY_'))).toBe(true);
+  const metadataBytes = metadata.reduce((sum, b) => sum + b.length, 0);
+  expect(metadataBytes).toBeLessThan(legacyBytes / 3);
+  await testInfo.attach('metadata-transfer.json', {
+    body: JSON.stringify({ legacyOverviewBytes: legacyBytes, metadataBytes }),
+    contentType: 'application/json',
+  });
+});
+
+test('document detail failures can retry and late detail responses cannot replace a new selection', async ({
+  page,
+  request,
+}) => {
+  const { workspace } = await pagedFixture(request);
+  let recover = false;
+  await page.route('**/document?path=%2Fdocs%2Ffile-29.md*', async (route) => {
+    if (!recover)
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: { code: 'UNAVAILABLE', message: 'Document temporarily unavailable.' },
+        }),
+      });
+    else await route.continue();
+  });
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspace.id);
+  await page.getByRole('button', { name: 'Documents', exact: true }).click();
+  await page.getByRole('button', { name: '/docs/file-29.md', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Document temporarily unavailable.');
+  recover = true;
+  await page.getByRole('button', { name: 'Retry document', exact: true }).click();
+  await expect(page.locator('.document-content')).toContainText('LAZY_BODY_29');
+  let release!: () => void;
+  let reached!: () => void;
+  const delayed = new Promise<void>((r) => {
+    release = r;
+  });
+  const requested = new Promise<void>((r) => {
+    reached = r;
+  });
+  await page.route('**/document?path=%2Fdocs%2Ffile-28.md*', async (route) => {
+    const response = await route.fetch();
+    reached();
+    await delayed;
+    await route.fulfill({ response });
+  });
+  await page.getByRole('button', { name: '/docs/file-28.md', exact: true }).click();
+  await requested;
+  await page.getByRole('button', { name: '/docs/file-27.md', exact: true }).click();
+  await expect(page.locator('.document-content')).toContainText('LAZY_BODY_27');
+  const late = page.waitForResponse(
+    (r) => new URL(r.url()).searchParams.get('path') === '/docs/file-28.md',
+  );
+  release();
+  await (await late).finished();
+  await expect(page.locator('.document-content')).toContainText('LAZY_BODY_27');
+  await expect(page.locator('.document-content')).not.toContainText('LAZY_BODY_28');
+});
+
+test('change status filtering reaches proposals outside the loaded page and paginated failures can retry', async ({
+  page,
+  request,
+}) => {
+  const { workspace, root, headers } = await pagedFixture(request);
+  for (let n = 0; n < 27; n++)
+    await request.post(`${root}/changes`, {
+      headers,
+      data: {
+        title: `Pending page ${n}`,
+        operations: [{ path: `/new-${n}.md`, baseRevision: null, content: `Pending content ${n}` }],
+      },
+    });
+  let failPage = true;
+  await page.route(`**/workspaces/${workspace.id}/changes/page?*`, async (route) => {
+    if (failPage)
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: { code: 'UNAVAILABLE', message: 'Change listing temporarily unavailable.' },
+        }),
+      });
+    else await route.continue();
+  });
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspace.id);
+  await page.getByRole('button', { name: 'Change sets', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('Change listing temporarily unavailable.');
+  failPage = false;
+  await page.getByRole('button', { name: 'Retry change sets', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Pending page 26', exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Load more change sets', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Pending page 0', exact: false })).toBeVisible();
+  await page.getByRole('combobox', { name: 'Change status', exact: true }).selectOption('applied');
+  await expect(page.getByRole('button', { name: 'Seed documents 0', exact: false })).toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Pending page 26', exact: false }),
+  ).not.toBeVisible();
+});
+
+test('late load-more responses cannot append into a fresh traversal after a search round trip', async ({
+  page,
+  request,
+}) => {
+  const { workspace } = await pagedFixture(request);
+  let release!: () => void;
+  let reached!: () => void;
+  const delayed = new Promise<void>((r) => {
+    release = r;
+  });
+  const requested = new Promise<void>((r) => {
+    reached = r;
+  });
+  await page.route(`**/workspaces/${workspace.id}/documents/page?*`, async (route) => {
+    if (new URL(route.request().url()).searchParams.has('cursor')) {
+      const response = await route.fetch();
+      reached();
+      await delayed;
+      await route.fulfill({ response });
+    } else await route.continue();
+  });
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspace.id);
+  await page.getByRole('button', { name: 'Documents', exact: true }).click();
+  await page.getByRole('button', { name: 'Load more documents', exact: true }).click();
+  await requested;
+  await page.getByLabel('Search documents').fill('file-29');
+  await expect(
+    page.getByRole('button', { name: '/docs/file-28.md', exact: true }),
+  ).not.toBeVisible();
+  await page.getByLabel('Search documents').fill('');
+  await expect(page.getByRole('button', { name: '/docs/file-28.md', exact: true })).toBeVisible();
+  const late = page.waitForResponse(
+    (r) =>
+      new URL(r.url()).pathname.endsWith('/documents/page') &&
+      new URL(r.url()).searchParams.has('cursor'),
+  );
+  release();
+  await (await late).finished();
+  await expect(
+    page.getByRole('button', { name: '/docs/file-00.md', exact: true }),
+  ).not.toBeVisible();
+  await expect(
+    page.getByRole('button', { name: 'Load more documents', exact: true }),
+  ).toBeEnabled();
+});
+test('overview never attributes an unloaded agent proposal to the operator', async ({
+  page,
+  request,
+}) => {
+  const headers = { Authorization: `Bearer ${token}` };
+  const base = 'http://127.0.0.1:17310/v1/workspaces';
+  const workspace = await (
+    await request.post(base, { headers, data: { name: 'Partial identity attribution' } })
+  ).json();
+  const root = `${base}/${workspace.id}`;
+  const author = await (
+    await request.post(`${root}/agents`, {
+      headers,
+      data: { name: 'Original author', domain: 'Drafts', provider: 'External' },
+    })
+  ).json();
+  await request.post(`${root}/grants`, {
+    headers,
+    data: { agentId: author.agent.id, scope: '/', actions: ['read', 'write'], effect: 'allow' },
+  });
+  for (let n = 0; n < 25; n++)
+    await request.post(`${root}/agents`, {
+      headers,
+      data: { name: `Later identity ${n}`, domain: 'Drafts', provider: 'External' },
+    });
+  await request.post(`${root}/changes`, {
+    headers: { Authorization: `Bearer ${author.token}` },
+    data: {
+      title: 'Attributed agent proposal',
+      operations: [{ path: '/authored.md', baseRevision: null, content: 'Agent-authored content' }],
+    },
+  });
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspace.id);
+  const row = page.getByRole('button', { name: /Attributed agent proposal/ });
+  await expect(row).toBeVisible();
+  await expect(row).not.toContainText('Operator');
+  await expect(row).toContainText(author.agent.id.slice(0, 8));
+});
+
 async function reviewFixture(request: APIRequestContext) {
   const headers = { Authorization: `Bearer ${token}` };
   const base = 'http://127.0.0.1:17310/v1/workspaces';
@@ -169,7 +606,7 @@ test('late history responses cannot expose another document restore action', asy
   const requested = new Promise<void>((resolve) => {
     reached = resolve;
   });
-  await page.route('**/history?path=%2Fa.md', async (route) => {
+  await page.route('**/history/page?path=%2Fa.md*', async (route) => {
     const response = await route.fetch();
     reached();
     await delayed;

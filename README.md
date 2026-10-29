@@ -12,6 +12,7 @@ AI File Manager explores how independent AI tools can collaborate on documents w
 
 - Give each agent a separate token, responsibility domain, and document scope.
 - Enforce default-deny access, explicit deny rules, expiration, and revocation.
+- Explain effective access with self-only agent preflight and operator rule evidence.
 - Accept immutable multi-document proposals instead of unrestricted direct writes.
 - Separate advisory agent reviews from human approval and application.
 - Recheck current authority and revision heads before an atomic transaction.
@@ -19,7 +20,7 @@ AI File Manager explores how independent AI tools can collaborate on documents w
 - Coordinate task assignment and handoffs without transferring permissions.
 - Retry proposals and application with durable, explicitly scoped idempotency keys.
 - Browse metadata in bounded pages and fetch document or proposal text on demand.
-- Integrate through REST, a TypeScript client, CLI, and nine MCP tools.
+- Integrate through REST, a TypeScript client, CLI, and ten MCP tools.
 
 The service does not call an LLM. Your connected agents run their own models and use the same permission boundary, regardless of provider or framework.
 

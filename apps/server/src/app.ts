@@ -5,7 +5,9 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { z, ZodError } from 'zod';
 import { WorkspaceService } from '../../../packages/core/src/service.js';
+import { validateIdempotencyKey } from '../../../packages/core/src/idempotency.js';
 import { DomainError, operator, type Principal } from '../../../packages/core/src/types.js';
+import type { Collection, PageOptions } from '../../../packages/core/src/types.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -52,7 +54,7 @@ export async function createApp(options: AppOptions) {
   await app.register(cors, {
     origin: origins,
     methods: ['GET', 'POST', 'PATCH'],
-    allowedHeaders: ['Authorization', 'Content-Type'],
+    allowedHeaders: ['Authorization', 'Content-Type', 'Idempotency-Key'],
   });
   app.setErrorHandler((error, _request, reply) => {
     if (error instanceof ZodError)
@@ -96,8 +98,92 @@ export async function createApp(options: AppOptions) {
         if (!principal)
           throw new DomainError('UNAUTHENTICATED', 'The token is invalid or revoked.', 401);
         request.principal = principal;
+        if (request.headers['idempotency-key'] !== undefined) {
+          validateIdempotencyKey(request.headers['idempotency-key']);
+          if (
+            request.method !== 'POST' ||
+            !/^\/v1\/workspaces\/[^/]+\/changes(?:\/[^/]+\/apply)?$/.test(
+              request.url.split('?')[0]!,
+            )
+          )
+            throw new DomainError(
+              'INVALID_INPUT',
+              'Idempotency-Key is supported only for proposal creation and change application.',
+            );
+        }
       });
       const s = options.service;
+      api.post('/workspaces/:workspaceId/access/check', async (r) => {
+        const input = z
+          .object({
+            agentId: z.string().min(1).max(200).optional(),
+            checks: z
+              .array(
+                z
+                  .object({
+                    path: z.string(),
+                    action: z.enum(['read', 'write', 'delete', 'review']),
+                  })
+                  .strict(),
+              )
+              .min(1)
+              .max(20),
+          })
+          .strict()
+          .parse(r.body);
+        return s.checkAccess(
+          r.principal,
+          params(r.params).workspaceId,
+          input.checks,
+          input.agentId,
+        );
+      });
+      api.get('/workspaces/:workspaceId/summary', async (r) =>
+        s.summary(r.principal, params(r.params).workspaceId),
+      );
+      const collections: Collection[] = [
+        'documents',
+        'changes',
+        'history',
+        'agents',
+        'grants',
+        'tasks',
+        'activity',
+      ];
+      for (const collection of collections) {
+        const schema = z
+          .object({
+            limit: z
+              .string()
+              .regex(/^[0-9]+$/)
+              .transform(Number)
+              .pipe(z.number().int().min(1).max(100))
+              .optional(),
+            cursor: z.string().min(1).max(1024).optional(),
+            ...(collection === 'documents'
+              ? {
+                  query: z.string().max(512).optional(),
+                  includeDeleted: z
+                    .enum(['true', 'false'])
+                    .transform((v) => v === 'true')
+                    .optional(),
+                }
+              : {}),
+            ...(collection === 'changes'
+              ? { status: z.enum(['pending', 'approved', 'applied', 'rejected']).optional() }
+              : {}),
+            ...(collection === 'history' ? { path: z.string() } : {}),
+          })
+          .strict();
+        api.get(`/workspaces/:workspaceId/${collection}/page`, async (r) =>
+          s.page(
+            r.principal,
+            params(r.params).workspaceId,
+            collection,
+            schema.parse(r.query) as PageOptions,
+          ),
+        );
+      }
       api.get('/me', async (r) => r.principal);
       api.get('/workspaces', async (r) => s.listWorkspaces(r.principal));
       api.post('/workspaces', async (r, reply) =>
@@ -183,7 +269,14 @@ export async function createApp(options: AppOptions) {
       api.post('/workspaces/:workspaceId/changes', async (r, reply) =>
         reply
           .code(201)
-          .send(s.propose(r.principal, params(r.params).workspaceId, proposalSchema.parse(r.body))),
+          .send(
+            s.propose(
+              r.principal,
+              params(r.params).workspaceId,
+              proposalSchema.parse(r.body),
+              r.headers['idempotency-key'] as string | undefined,
+            ),
+          ),
       );
       api.get('/workspaces/:workspaceId/changes/:id', async (r) => {
         const p = params(r.params);
@@ -192,6 +285,14 @@ export async function createApp(options: AppOptions) {
       for (const action of ['approve', 'reject', 'apply'] as const)
         api.post(`/workspaces/:workspaceId/changes/:id/${action}`, async (r) => {
           const p = params(r.params);
+          if (action === 'apply') {
+            const key = r.headers['idempotency-key'] as string | undefined;
+            if (key !== undefined)
+              z.object({})
+                .strict()
+                .parse(r.body ?? {});
+            return s.apply(r.principal, p.workspaceId, p.id, key);
+          }
           return s[action](r.principal, p.workspaceId, p.id);
         });
       api.get('/workspaces/:workspaceId/changes/:id/reviews', async (r) => {

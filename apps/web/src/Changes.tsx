@@ -1,19 +1,46 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChangeSet, Review, Revision } from '../../../packages/core/src/types.js';
-import { Empty, Field, Status, short, timestamp, useConsole } from './components.js';
+import {
+  Empty,
+  ErrorMessage,
+  Field,
+  PageControls,
+  Status,
+  short,
+  timestamp,
+  useConsole,
+} from './components.js';
+import { useResource } from './pages.js';
 export function Changes() {
-  const { data, client, wid, run, busy } = useConsole();
+  const {
+    data,
+    pages,
+    client,
+    wid,
+    generation,
+    changeStatus: filter,
+    setChangeStatus: setFilter,
+  } = useConsole();
   const [selected, setSelected] = useState<string | null>(null);
-  const [filter, setFilter] = useState('all');
-  const change = data.changes.find((c) => c.id === selected);
-  const changes = data.changes.filter((c) => filter === 'all' || c.status === filter);
+  const detail = useResource(selected ? `${wid}:${selected}` : null, generation, () =>
+    client.change(wid, selected!),
+  );
+  const change = detail.data;
+  const changes = data.changes;
   return (
     <>
       <div className="section-toolbar">
         <p className="muted">Immutable proposals. Explicit approval. Atomic application.</p>
         <label className="filter">
           Status{' '}
-          <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+          <select
+            aria-label="Change status"
+            value={filter}
+            onChange={(e) => {
+              setFilter(e.target.value);
+              setSelected(null);
+            }}
+          >
             <option value="all">All changes</option>
             {['pending', 'approved', 'applied', 'rejected'].map((status) => (
               <option key={status} value={status}>
@@ -35,25 +62,37 @@ export function Changes() {
               <span>
                 <Status value={c.status} />
                 <small>
-                  {c.operations.length} {c.operations.length === 1 ? 'file' : 'files'} ·{' '}
+                  {c.operationCount} {c.operationCount === 1 ? 'file' : 'files'} ·{' '}
                   {timestamp(c.createdAt)}
                 </small>
               </span>
             </button>
           ))}
-          {!changes.length && (
+          {!pages.changes.loading && !pages.changes.error && !changes.length && (
             <Empty title="No changes in this view">
               Agent proposals and operator edits appear here.
             </Empty>
           )}
+          <PageControls state={pages.changes} label="change sets" />
         </section>
         <section className="change-detail">
+          {detail.loading && <p role="status">Loading change...</p>}
+          {detail.error && (
+            <>
+              <ErrorMessage message={detail.error} />
+              <button className="secondary" onClick={detail.retry}>
+                Retry change
+              </button>
+            </>
+          )}
           {change ? (
             <ChangeDetail key={change.id} change={change} />
           ) : (
-            <Empty title="Review a change set">
-              Select a proposal to inspect its exact content and approval state.
-            </Empty>
+            !selected && (
+              <Empty title="Review a change set">
+                Select a proposal to inspect its exact content and approval state.
+              </Empty>
+            )
           )}
         </section>
       </div>
@@ -61,7 +100,8 @@ export function Changes() {
   );
 }
 function ChangeDetail({ change }: { change: ChangeSet }) {
-  const { client, wid, data, run, busy } = useConsole();
+  const { client, wid, data, run, busy, generation } = useConsole();
+  const applyKey = useRef(crypto.randomUUID());
   const [bases, setBases] = useState<Record<string, Revision | undefined>>({});
   const [reviews, setReviews] = useState<Review[]>([]);
   const [note, setNote] = useState('');
@@ -96,7 +136,7 @@ function ChangeDetail({ change }: { change: ChangeSet }) {
     return () => {
       active = false;
     };
-  }, [client, wid, change.id, attempt]);
+  }, [client, wid, change.id, generation, attempt]);
   const author =
     change.authorId === 'operator'
       ? 'Operator'
@@ -174,8 +214,7 @@ function ChangeDetail({ change }: { change: ChangeSet }) {
             disabled={busy || !loaded || missingBase}
             onClick={() =>
               run(
-                () =>
-                  client.request('POST', `/v1/workspaces/${wid}/changes/${change.id}/apply`, {}),
+                () => client.apply(wid, change.id, { idempotencyKey: applyKey.current }),
                 'Change applied successfully.',
               )
             }

@@ -13,14 +13,18 @@ This roadmap separates working capabilities from research directions. It makes n
 - [x] REST, TypeScript client, CLI, and scoped MCP stdio tools.
 - [x] Synthetic collaboration example and consistent database backups.
 - [x] Domain, transport, integration, and browser verification.
+- [x] Durable proposal/apply idempotency and schema-1 migration.
+- [x] Paginated metadata and activity APIs, server-side filters, and console lazy content loading.
+
+- [x] Current-policy access preflight, operator explanations, and self-only MCP inspection.
 
 ## Next: protocol and governance
 
 - [ ] Publish a versioned OpenAPI contract and standalone SDK packages.
-- [ ] Add task-bound grants, delegated capabilities, and policy explanation/simulation.
+- [ ] Add task-bound grants, delegated capabilities, and hypothetical policy simulation.
 - [ ] Add structured handoff provenance, cancellation, and review requirements.
-- [ ] Add paginated document metadata and audit APIs; avoid full content in administrative overviews at scale.
-- [ ] Add retention, credential rotation workflows, and migration tooling.
+- [ ] Extend bounded reads to workspace discovery and review notes; benchmark and index large filtered workspaces.
+- [ ] Add retention, credential rotation workflows, and operator-controlled upgrade tooling beyond the schema-1 migration.
 
 ## Research: document collaboration
 

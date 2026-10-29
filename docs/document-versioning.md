@@ -10,13 +10,13 @@ Snapshots deliberately favor simple recovery and exact review over compact stora
 
 Use `GET /v1/workspaces/:workspaceId/revision?path=...&revisionId=...` or `client.revision(workspaceId, path, revisionId)` when a proposal already identifies its base. This returns one immutable snapshot without transferring unrelated history. The workspace, canonical path, and revision ID must all match. Tombstones can be read by the same endpoint.
 
-Current read permission is required even for an old revision, and a revision ID never grants authority. Unreadable paths return `FORBIDDEN`; a missing revision or a revision belonging to another document returns `NOT_FOUND`. Full history remains available for explicit history browsing and restoration.
+Current read permission is required even for an old revision, and a revision ID never grants authority. Unreadable paths return `FORBIDDEN`; a missing revision or a revision belonging to another document returns `NOT_FOUND`. Browse revision metadata through `/history/page?path=...`, then read a selected snapshot through `/revision`. The console uses this bounded flow for inspection and restore. The legacy full `/history` array remains available for compatibility.
 
 ## Optimistic concurrency
 
 An agent edits a specific base revision. The apply transaction compares that revision to the current head. If another proposal has advanced the head, application fails with `REVISION_CONFLICT` and commits nothing.
 
-For a multi-document change, every precondition must pass. A conflict in the last operation cannot leave earlier operations applied. The agent should read the new state, reconcile its edits, and create a new proposal requiring a new approval.
+For a multi-document change, every precondition must pass. A conflict in the last operation cannot leave earlier operations applied. For an ambiguous apply transport failure, the operator can resend with the original idempotency key without creating another revision. A receipt does not resolve an actual revision conflict. The agent should read the new state, reconcile its edits, and create a new proposal requiring a new approval.
 
 ## Approval binding
 

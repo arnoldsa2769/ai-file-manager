@@ -27,6 +27,31 @@ export interface Grant {
   revokedAt: string | null;
   createdAt: string;
 }
+export interface AccessCheck {
+  path: string;
+  action: Action;
+}
+export interface AccessEvidence {
+  matchedGrantIds: string[];
+  ignoredGrants: { grantId: string; reason: 'revoked' | 'expired' }[];
+  truncated: boolean;
+}
+export interface AccessRequirement {
+  action: Action;
+  allowed: boolean;
+  reason: 'allow' | 'explicit_deny' | 'default_deny';
+  evidence?: AccessEvidence;
+}
+export interface AccessDecision extends AccessCheck {
+  allowed: boolean;
+  requirements: AccessRequirement[];
+}
+export interface AccessReport {
+  workspaceId: string;
+  agentId: string;
+  evaluatedAt: string;
+  decisions: AccessDecision[];
+}
 export interface Operation {
   path: string;
   baseRevision: string | null;
@@ -99,6 +124,35 @@ export interface Overview {
   changes: ChangeSet[];
   tasks: Task[];
   activity: Activity[];
+}
+export type DocumentMetadata = Omit<Document, 'content'>;
+export type RevisionMetadata = Omit<Revision, 'content'>;
+export type ChangeMetadata = Omit<ChangeSet, 'operations'> & { operationCount: number };
+export interface Collections {
+  documents: DocumentMetadata;
+  changes: ChangeMetadata;
+  history: RevisionMetadata;
+  agents: Agent;
+  grants: Grant;
+  tasks: Task;
+  activity: Activity;
+}
+export type Collection = keyof Collections;
+export interface Page<T> {
+  items: T[];
+  nextCursor: string | null;
+}
+export interface PageOptions {
+  limit?: number;
+  cursor?: string;
+  query?: string;
+  status?: ChangeSet['status'];
+  path?: string;
+  includeDeleted?: boolean;
+}
+export interface WorkspaceSummary {
+  workspace: Workspace;
+  counts: { documents: number; activeAgents: number; pendingChanges: number; tasks: number };
 }
 export class DomainError extends Error {
   constructor(

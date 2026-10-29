@@ -12,4 +12,4 @@ Make proposals immutable. Bind approval to the exact content fingerprint. Rechec
 
 ## Consequences
 
-Conflicts preserve all current heads and leave the proposal unapplied. Revocation can invalidate approved work. Agents must create replacement proposals for rebases or content changes. The operator can approve their own human edits, while agents cannot approve or apply. Semantic merging and idempotent mutation keys are future protocol work.
+Conflicts preserve all current heads and leave the proposal unapplied. Revocation can invalidate approved work. Agents must create replacement proposals for rebases or content changes. The operator can approve their own human edits, while agents cannot approve or apply. Semantic merging remains future protocol work. [ADR 004](004-reliable-paged-protocol.md) adds optional durable proposal/apply keys while preserving this approval protocol.

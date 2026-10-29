@@ -8,7 +8,17 @@ import type {
   Task,
   Workspace,
   Overview,
+  WorkspaceSummary,
+  Collection,
+  Collections,
+  Page,
+  PageOptions,
+  AccessCheck,
+  AccessReport,
 } from '../../core/src/types.js';
+export interface MutationOptions {
+  idempotencyKey?: string;
+}
 export class WorkspaceApiError extends Error {
   constructor(
     public code: string,
@@ -37,7 +47,12 @@ export class WorkspaceClient {
   }
   private readonly token: string;
   private readonly timeoutMs: number;
-  async request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    options: MutationOptions = {},
+  ): Promise<T> {
     if (!path.startsWith('/v1/') || path.includes('://'))
       throw new Error('SDK paths must remain within /v1/.');
     const response = await fetch(this.baseUrl + path, {
@@ -45,6 +60,9 @@ export class WorkspaceClient {
       redirect: 'error',
       headers: {
         Authorization: `Bearer ${this.token}`,
+        ...(options.idempotencyKey === undefined
+          ? {}
+          : { 'Idempotency-Key': options.idempotencyKey }),
         ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -71,6 +89,26 @@ export class WorkspaceClient {
   overview(wid: string) {
     return this.request<Overview>('GET', `${this.root(wid)}/overview`);
   }
+  summary(wid: string) {
+    return this.request<WorkspaceSummary>('GET', `${this.root(wid)}/summary`);
+  }
+  checkAccess(wid: string, checks: AccessCheck[], agentId?: string) {
+    return this.request<AccessReport>('POST', `${this.root(wid)}/access/check`, {
+      checks,
+      ...(agentId === undefined ? {} : { agentId }),
+    });
+  }
+  page<K extends Collection>(wid: string, collection: K, options: PageOptions = {}) {
+    const query = new URLSearchParams(
+      Object.entries(options)
+        .filter(([, value]) => value !== undefined)
+        .map(([key, value]): [string, string] => [key, String(value)]),
+    );
+    return this.request<Page<Collections[K]>>(
+      'GET',
+      `${this.root(wid)}/${collection}/page?${query}`,
+    );
+  }
   documents(wid: string) {
     return this.request<Document[]>('GET', `${this.root(wid)}/documents`);
   }
@@ -92,8 +130,21 @@ export class WorkspaceClient {
       `${this.root(wid)}/revision?path=${encodeURIComponent(path)}&revisionId=${encodeURIComponent(revisionId)}`,
     );
   }
-  propose(wid: string, title: string, operations: Operation[]) {
-    return this.request<ChangeSet>('POST', `${this.root(wid)}/changes`, { title, operations });
+  propose(wid: string, title: string, operations: Operation[], options?: MutationOptions) {
+    return this.request<ChangeSet>(
+      'POST',
+      `${this.root(wid)}/changes`,
+      { title, operations },
+      options,
+    );
+  }
+  apply(wid: string, id: string, options?: MutationOptions) {
+    return this.request<ChangeSet>(
+      'POST',
+      `${this.root(wid)}/changes/${encodeURIComponent(id)}/apply`,
+      {},
+      options,
+    );
   }
   changes(wid: string) {
     return this.request<ChangeSet[]>('GET', `${this.root(wid)}/changes`);

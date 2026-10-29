@@ -1,27 +1,56 @@
-import { useState } from 'react';
-import type { Document, Revision } from '../../../packages/core/src/types.js';
-import { Dialog, Empty, Field, short, timestamp, useConsole } from './components.js';
+import { useRef, useState } from 'react';
+import type { Document, RevisionMetadata } from '../../../packages/core/src/types.js';
+import {
+  Dialog,
+  Empty,
+  ErrorMessage,
+  Field,
+  PageControls,
+  short,
+  timestamp,
+  useConsole,
+} from './components.js';
+import { usePage, useResource } from './pages.js';
+
 export function Documents() {
-  const { data, client, wid, run, busy, navigate } = useConsole();
-  const [query, setQuery] = useState('');
+  const {
+    data,
+    pages,
+    client,
+    wid,
+    run,
+    busy,
+    navigate,
+    generation,
+    documentQuery,
+    setDocumentQuery,
+  } = useConsole();
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<Document | 'new' | null>(null);
-  const [history, setHistory] = useState<{ path: string; revisions: Revision[] } | null>(null);
-  const docs = data.documents.filter((d) => d.path.toLowerCase().includes(query.toLowerCase()));
-  const document = data.documents.find((d) => d.path === selected);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const pending = useRef<{ fingerprint: string; key: string } | null>(null);
+  const detail = useResource(selected ? `${wid}:${selected}` : null, generation, () =>
+    client.read(wid, selected!, true),
+  );
+  const document = detail.data;
   async function propose(
     path: string,
     content: string | null,
     baseRevision: string | null,
     title: string,
   ) {
+    const operations = [{ path, content, baseRevision }];
+    const fingerprint = JSON.stringify({ title, operations });
+    if (pending.current?.fingerprint !== fingerprint)
+      pending.current = { fingerprint, key: crypto.randomUUID() };
     const ok = await run(
-      () => client.propose(wid, title, [{ path, content, baseRevision }]),
+      () => client.propose(wid, title, operations, { idempotencyKey: pending.current!.key }),
       'Change proposed. Review it in Change sets.',
     );
     if (ok) {
+      pending.current = null;
       setEditing(null);
-      setHistory(null);
+      setHistoryOpen(false);
       navigate('Change sets');
     }
   }
@@ -32,8 +61,12 @@ export function Documents() {
           <span className="sr-only">Search documents</span>
           <input
             placeholder="Search by virtual path..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            value={documentQuery}
+            onChange={(e) => {
+              setDocumentQuery(e.target.value);
+              setSelected(null);
+              setHistoryOpen(false);
+            }}
           />
         </label>
         <button onClick={() => setEditing('new')}>New document</button>
@@ -42,29 +75,39 @@ export function Documents() {
         <section className="file-list" aria-label="Documents">
           <div className="list-heading">
             <span>Managed documents</span>
-            <span>{docs.length}</span>
+            <span>{data.documents.length} loaded</span>
           </div>
-          {docs.map((doc) => (
+          {data.documents.map((doc) => (
             <button
               key={doc.path}
               aria-label={doc.path}
               className={`file-item ${selected === doc.path ? 'selected' : ''}`}
               onClick={() => {
                 setSelected(doc.path);
-                setHistory(null);
+                setHistoryOpen(false);
               }}
             >
               <code>{doc.path}</code>
               <small>{doc.deleted ? 'Deleted' : timestamp(doc.updatedAt)}</small>
             </button>
           ))}
-          {!docs.length && (
+          {!pages.documents.loading && !pages.documents.error && !data.documents.length && (
             <Empty title="No matching documents">
-              Create a document proposal to start versioning.
+              Create a document proposal or change your search.
             </Empty>
           )}
+          <PageControls state={pages.documents} label="documents" />
         </section>
         <section className="document-detail">
+          {detail.loading && <p role="status">Loading document...</p>}
+          {detail.error && (
+            <>
+              <ErrorMessage message={detail.error} />
+              <button className="secondary" onClick={detail.retry}>
+                Retry document
+              </button>
+            </>
+          )}
           {document ? (
             <>
               <div className="detail-head">
@@ -78,18 +121,7 @@ export function Documents() {
                 </span>
               </div>
               <div className="document-actions">
-                <button
-                  className="secondary"
-                  disabled={busy}
-                  onClick={() =>
-                    run(async () => {
-                      setHistory({
-                        path: document.path,
-                        revisions: await client.history(wid, document.path),
-                      });
-                    })
-                  }
-                >
+                <button className="secondary" disabled={busy} onClick={() => setHistoryOpen(true)}>
                   Version history
                 </button>
                 <button disabled={busy || document.deleted} onClick={() => setEditing(document)}>
@@ -100,7 +132,7 @@ export function Documents() {
                     className="danger quiet"
                     disabled={busy}
                     onClick={() =>
-                      propose(
+                      void propose(
                         document.path,
                         null,
                         document.currentRevision,
@@ -117,47 +149,28 @@ export function Documents() {
                   ? 'This document has been deleted. Open version history to restore an earlier revision.'
                   : document.content}
               </pre>
-              {history?.path === document.path && (
-                <section className="history">
-                  <h2>Version history</h2>
-                  <p className="muted">
-                    Restoring creates a new proposal. Existing history is preserved.
-                  </p>
-                  {history.revisions
-                    .filter((rev) => rev.path === document.path)
-                    .map((rev) => (
-                      <div key={rev.id} className="revision">
-                        <div>
-                          <code>{short(rev.id)}</code>
-                          <span>
-                            {timestamp(rev.createdAt)} ·{' '}
-                            {rev.authorId === 'operator' ? 'Operator' : short(rev.authorId)}
-                          </span>
-                        </div>
-                        <button
-                          className="secondary"
-                          disabled={busy || rev.deleted || rev.id === document.currentRevision}
-                          onClick={() =>
-                            propose(
-                              document.path,
-                              rev.content,
-                              document.currentRevision,
-                              `Restore ${document.path} to ${short(rev.id)}`,
-                            )
-                          }
-                        >
-                          Propose restore
-                        </button>
-                        <pre>{rev.deleted ? 'Deletion tombstone' : rev.content}</pre>
-                      </div>
-                    ))}
-                </section>
+              {historyOpen && (
+                <History
+                  key={document.path}
+                  document={document}
+                  onRestore={async (rev) => {
+                    const snapshot = await client.revision(wid, document.path, rev.id);
+                    await propose(
+                      document.path,
+                      snapshot.content,
+                      document.currentRevision,
+                      `Restore ${document.path} to ${short(rev.id)}`,
+                    );
+                  }}
+                />
               )}
             </>
           ) : (
-            <Empty title="Select a document">
-              Inspect its content, compare revisions, or propose a change.
-            </Empty>
+            !selected && (
+              <Empty title="Select a document">
+                Inspect its content, compare revisions, or propose a change.
+              </Empty>
+            )
           )}
         </section>
       </div>
@@ -171,6 +184,98 @@ export function Documents() {
         />
       )}
     </>
+  );
+}
+function History({
+  document,
+  onRestore,
+}: {
+  document: Document;
+  onRestore: (revision: RevisionMetadata) => Promise<void>;
+}) {
+  const { client, wid, generation } = useConsole();
+  const page = usePage(client, wid, 'history', { path: document.path }, generation);
+  return (
+    <section className="history">
+      <h2>Version history</h2>
+      <p className="muted">
+        Restoring creates a new proposal. Existing history is preserved. Open a snapshot to read its
+        content.
+      </p>
+      {page.items.map((rev) => (
+        <HistoryRevision
+          key={rev.id}
+          revision={rev}
+          currentRevision={document.currentRevision}
+          onRestore={onRestore}
+        />
+      ))}
+      <PageControls state={page} label="revisions" />
+    </section>
+  );
+}
+function HistoryRevision({
+  revision: rev,
+  currentRevision,
+  onRestore,
+}: {
+  revision: RevisionMetadata;
+  currentRevision: string;
+  onRestore: (revision: RevisionMetadata) => Promise<void>;
+}) {
+  const { client, wid, generation, busy } = useConsole();
+  const [opened, setOpened] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [error, setError] = useState('');
+  const snapshot = useResource(opened ? `${wid}:${rev.path}:${rev.id}` : null, generation, () =>
+    client.revision(wid, rev.path, rev.id),
+  );
+  return (
+    <div className="revision">
+      <div>
+        <code>{short(rev.id)}</code>
+        <span>
+          {timestamp(rev.createdAt)} ·{' '}
+          {rev.authorId === 'operator' ? 'Operator' : short(rev.authorId)}
+        </span>
+      </div>
+      <div className="document-actions">
+        <button className="secondary" disabled={snapshot.loading} onClick={() => setOpened(true)}>
+          View snapshot
+        </button>
+        <button
+          className="secondary"
+          disabled={busy || restoring || rev.deleted || rev.id === currentRevision}
+          onClick={async () => {
+            setRestoring(true);
+            setError('');
+            try {
+              await onRestore(rev);
+            } catch (e) {
+              setError(e instanceof Error ? e.message : 'Could not restore this revision.');
+            } finally {
+              setRestoring(false);
+            }
+          }}
+        >
+          Propose restore
+        </button>
+      </div>
+      {restoring && <p role="status">Preparing restore...</p>}
+      {snapshot.loading && <p role="status">Loading snapshot...</p>}
+      {error && <ErrorMessage message={error} />}
+      {snapshot.error && (
+        <>
+          <ErrorMessage message={snapshot.error} />
+          <button className="secondary" onClick={snapshot.retry}>
+            Retry snapshot
+          </button>
+        </>
+      )}
+      {snapshot.data && (
+        <pre>{snapshot.data.deleted ? 'Deletion tombstone' : snapshot.data.content}</pre>
+      )}
+    </div>
   );
 }
 function Editor({

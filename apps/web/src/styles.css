@@ -864,6 +864,32 @@ td strong {
   gap: 5px;
   flex-wrap: wrap;
 }
+.permission-inspector {
+  margin-bottom: 32px;
+  min-width: 0;
+}
+.access-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 16px;
+  margin: 20px 0;
+}
+.access-form .field {
+  flex: 1 1 220px;
+  min-width: 0;
+  margin: 0;
+}
+.access-evidence code,
+.permission-inspector > section > p code {
+  overflow-wrap: anywhere;
+}
+.access-evidence p {
+  margin: 10px 0;
+}
+.permission-inspector summary {
+  cursor: pointer;
+}
 .capabilities span {
   background: #eef3ef;
   padding: 2px 7px;

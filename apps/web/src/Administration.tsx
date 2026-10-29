@@ -1,8 +1,18 @@
 import { useState } from 'react';
+import { PermissionInspector } from './PermissionInspector.js';
 import type { Action, Agent, Task } from '../../../packages/core/src/types.js';
-import { Dialog, Empty, Field, Status, short, timestamp, useConsole } from './components.js';
+import {
+  Dialog,
+  Empty,
+  Field,
+  PageControls,
+  Status,
+  short,
+  timestamp,
+  useConsole,
+} from './components.js';
 export function Agents() {
-  const { data, client, wid, run, busy } = useConsole();
+  const { data, pages, client, wid, run, busy } = useConsole();
   const [creating, setCreating] = useState(false);
   const [credential, setCredential] = useState<{ name: string; token: string } | null>(null);
   return (
@@ -46,7 +56,7 @@ export function Agents() {
                         (!g.expiresAt || Date.parse(g.expiresAt) > Date.now()),
                     ).length
                   }{' '}
-                  grants
+                  loaded grants
                 </td>
                 <td>
                   <button
@@ -77,7 +87,8 @@ export function Agents() {
           </tbody>
         </table>
       </div>
-      {!data.agents.length && (
+      <PageControls state={pages.agents} label="agents" />
+      {!pages.agents.loading && !pages.agents.error && !data.agents.length && (
         <Empty title="No agents registered">
           Create a scoped identity for each connected AI tool.
         </Empty>
@@ -133,7 +144,7 @@ export function Agents() {
   );
 }
 export function Permissions() {
-  const { data, client, wid, run, busy } = useConsole();
+  const { data, pages, client, wid, run, busy } = useConsole();
   const [creating, setCreating] = useState(false);
   return (
     <>
@@ -143,6 +154,7 @@ export function Permissions() {
           Add grant
         </button>
       </div>
+      <PageControls state={pages.agents} label="agents" />
       <div className="policy-note">
         <strong>Scopes follow directory boundaries.</strong>
         <span>
@@ -150,6 +162,7 @@ export function Permissions() {
           <code>/research-private</code>. A task handoff adds no permissions.
         </span>
       </div>
+      <PermissionInspector />
       <div className="table-wrap">
         <table>
           <thead>
@@ -216,7 +229,8 @@ export function Permissions() {
           </tbody>
         </table>
       </div>
-      {!data.grants.length && (
+      <PageControls state={pages.grants} label="grants" />
+      {!pages.grants.loading && !pages.grants.error && !data.grants.length && (
         <Empty title="No document access granted">Agents start with no file permissions.</Empty>
       )}
       {creating && (
@@ -250,6 +264,7 @@ export function Permissions() {
                   ))}
               </select>
             </Field>
+            <PageControls state={pages.agents} label="agents" />
             <Field label="Virtual path scope">
               <input name="scope" required defaultValue="/research" />
             </Field>
@@ -287,7 +302,7 @@ export function Permissions() {
   );
 }
 export function Tasks() {
-  const { data, client, wid, run, busy } = useConsole();
+  const { data, pages, client, wid, run, busy } = useConsole();
   const [creating, setCreating] = useState(false);
   return (
     <>
@@ -299,6 +314,7 @@ export function Tasks() {
           Create task
         </button>
       </div>
+      <PageControls state={pages.agents} label="agents" />
       <div className="task-list">
         {data.tasks.map((task) => (
           <article key={task.id} className="task">
@@ -324,7 +340,8 @@ export function Tasks() {
                   }
                 >
                   <option hidden value={task.assigneeId}>
-                    {data.agents.find((a) => a.id === task.assigneeId)?.name ?? 'Unavailable agent'}
+                    {data.agents.find((a) => a.id === task.assigneeId)?.name ??
+                      short(task.assigneeId)}
                   </option>
                   {data.agents
                     .filter((a) => !a.revokedAt)
@@ -361,7 +378,8 @@ export function Tasks() {
           </article>
         ))}
       </div>
-      {!data.tasks.length && (
+      <PageControls state={pages.tasks} label="tasks" />
+      {!pages.tasks.loading && !pages.tasks.error && !data.tasks.length && (
         <Empty title="No tasks assigned">Create a bounded task for an active agent.</Empty>
       )}
       {creating && (
@@ -397,6 +415,7 @@ export function Tasks() {
                   ))}
               </select>
             </Field>
+            <PageControls state={pages.agents} label="agents" />
             <div className="form-actions">
               <button disabled={busy}>Assign task</button>
             </div>
@@ -407,11 +426,11 @@ export function Tasks() {
   );
 }
 export function Activity() {
-  const { data } = useConsole();
+  const { data, pages } = useConsole();
   return (
     <>
       <p className="muted">
-        Latest 200 mutation records. API append-only; not tamper-proof against the host
+        Mutation records, loaded in pages. API append-only; not tamper-proof against the host
         administrator.
       </p>
       <div className="table-wrap">
@@ -446,6 +465,7 @@ export function Activity() {
           </tbody>
         </table>
       </div>
+      <PageControls state={pages.activity} label="activity" />
     </>
   );
 }

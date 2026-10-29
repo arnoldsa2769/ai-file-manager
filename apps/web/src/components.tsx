@@ -1,10 +1,17 @@
 import { createContext, useContext, useEffect, useRef, type ReactNode } from 'react';
-import type { Overview } from '../../../packages/core/src/types.js';
+import type { Collections, WorkspaceSummary } from '../../../packages/core/src/types.js';
 import type { WorkspaceClient } from '../../../packages/sdk/src/index.js';
+import type { PageState } from './pages.js';
 export type View =
   'Overview' | 'Documents' | 'Agents' | 'Permissions' | 'Change sets' | 'Tasks' | 'Activity';
 export interface ConsoleState {
-  data: Overview;
+  data: WorkspaceSummary & { [K in Exclude<keyof Collections, 'history'>]: Collections[K][] };
+  pages: { [K in Exclude<keyof Collections, 'history'>]: PageState<Collections[K]> };
+  generation: number;
+  documentQuery: string;
+  setDocumentQuery: (query: string) => void;
+  changeStatus: string;
+  setChangeStatus: (status: string) => void;
   client: WorkspaceClient;
   wid: string;
   busy: boolean;
@@ -83,6 +90,29 @@ export function ErrorMessage({ message }: { message: string }) {
   return (
     <div className="error" role="alert">
       {message}
+    </div>
+  );
+}
+export function PageControls({ state, label }: { state: PageState<unknown>; label: string }) {
+  return (
+    <div className="page-controls" aria-label={`${label} pagination`}>
+      {state.error && <ErrorMessage message={state.error} />}
+      {state.loading && <p role="status">Loading {label}...</p>}
+      {state.error && !state.nextCursor && (
+        <button type="button" className="secondary" onClick={state.retry}>
+          Retry {label}
+        </button>
+      )}
+      {state.nextCursor && (
+        <button
+          type="button"
+          className="secondary"
+          disabled={state.loading}
+          onClick={() => void state.loadMore()}
+        >
+          {state.error ? `Retry more ${label}` : `Load more ${label}`}
+        </button>
+      )}
     </div>
   );
 }

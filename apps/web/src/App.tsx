@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import type { Overview as WorkspaceOverview, Workspace } from '../../../packages/core/src/types.js';
+import type { WorkspaceSummary, ChangeSet, Workspace } from '../../../packages/core/src/types.js';
 import { WorkspaceClient } from '../../../packages/sdk/src/index.js';
 import {
   ConsoleContext,
@@ -7,7 +7,9 @@ import {
   Empty,
   ErrorMessage,
   Field,
+  PageControls,
   Status,
+  short,
   timestamp,
   useConsole,
   type View,
@@ -15,6 +17,7 @@ import {
 import { Documents } from './Documents.js';
 import { Changes } from './Changes.js';
 import { Activity, Agents, Permissions, Tasks } from './Administration.js';
+import { usePage } from './pages.js';
 import './styles.css';
 const descriptions: Record<View, { title: string; description: string }> = {
   Overview: {
@@ -268,20 +271,54 @@ function WorkspaceConsole({
   controls: React.ReactNode;
   onSignOut: () => void;
 }) {
-  const [data, setData] = useState<WorkspaceOverview | null>(null);
+  const [summary, setSummary] = useState<WorkspaceSummary | null>(null);
+  const [generation, setGeneration] = useState(0);
+  const [documentQuery, setDocumentQuery] = useState('');
+  const [changeStatus, setChangeStatus] = useState('all');
+  const agents = usePage(client, wid, 'agents', {}, generation);
+  const grants = usePage(client, wid, 'grants', {}, generation);
+  const documents = usePage(
+    client,
+    wid,
+    'documents',
+    { includeDeleted: true, query: documentQuery },
+    generation,
+  );
+  const changes = usePage(
+    client,
+    wid,
+    'changes',
+    changeStatus === 'all' ? {} : { status: changeStatus as ChangeSet['status'] },
+    generation,
+  );
+  const tasks = usePage(client, wid, 'tasks', {}, generation);
+  const activity = usePage(client, wid, 'activity', {}, generation);
+  const pages = { agents, grants, documents, changes, tasks, activity };
+  const data = summary
+    ? {
+        ...summary,
+        agents: agents.items,
+        grants: grants.items,
+        documents: documents.items,
+        changes: changes.items,
+        tasks: tasks.items,
+        activity: activity.items,
+      }
+    : null;
   const [view, setView] = useState<View>('Overview');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   async function refresh() {
-    setData(await client.overview(wid));
+    setSummary(await client.summary(wid));
+    setGeneration((n) => n + 1);
   }
   useEffect(() => {
     let active = true;
     void client
-      .overview(wid)
+      .summary(wid)
       .then((d) => {
-        if (active) setData(d);
+        if (active) setSummary(d);
       })
       .catch((e) => {
         if (active) setError(e.message);
@@ -318,12 +355,9 @@ function WorkspaceConsole({
       aria-current={name === view ? 'page' : undefined}
     >
       <span>{name}</span>
-      {name === 'Change sets' &&
-        Boolean(data?.changes.filter((c) => c.status === 'pending').length) && (
-          <span className="nav-count">
-            {data?.changes.filter((c) => c.status === 'pending').length}
-          </span>
-        )}
+      {name === 'Change sets' && Boolean(data?.counts.pendingChanges) && (
+        <span className="nav-count">{data?.counts.pendingChanges}</span>
+      )}
     </button>
   ));
   return (
@@ -371,7 +405,7 @@ function WorkspaceConsole({
               <h1>{descriptions[view].title}</h1>
               <p>{descriptions[view].description}</p>
             </div>
-            <button className="secondary" disabled={busy} onClick={() => run(refresh)}>
+            <button className="secondary" disabled={busy} onClick={() => run(async () => {})}>
               Refresh
             </button>
           </div>
@@ -386,7 +420,21 @@ function WorkspaceConsole({
           </div>
           {data ? (
             <ConsoleContext.Provider
-              value={{ data, client, wid, busy, error, run, navigate: setView }}
+              value={{
+                data,
+                client,
+                wid,
+                busy,
+                error,
+                run,
+                navigate: setView,
+                pages,
+                generation,
+                documentQuery,
+                setDocumentQuery,
+                changeStatus,
+                setChangeStatus,
+              }}
             >
               {view === 'Overview' ? (
                 <Overview />
@@ -417,21 +465,21 @@ function WorkspaceConsole({
   );
 }
 function Overview() {
-  const { data, navigate } = useConsole();
+  const { data, navigate, pages } = useConsole();
   const pending = data.changes.filter((c) => ['pending', 'approved'].includes(c.status));
   return (
     <>
       <div className="workspace-summary">
         <div>
-          <strong>{data.documents.filter((d) => !d.deleted).length}</strong>
+          <strong>{data.counts.documents}</strong>
           <span>managed documents</span>
         </div>
         <div>
-          <strong>{data.agents.filter((a) => !a.revokedAt).length}</strong>
+          <strong>{data.counts.activeAgents}</strong>
           <span>active agents</span>
         </div>
         <div>
-          <strong>{pending.length}</strong>
+          <strong>{data.counts.pendingChanges}</strong>
           <span>awaiting action</span>
         </div>
         <button className="secondary" onClick={() => navigate('Permissions')}>
@@ -452,18 +500,30 @@ function Overview() {
                 <div>
                   <strong>{c.title}</strong>
                   <small>
-                    {data.agents.find((a) => a.id === c.authorId)?.name ?? 'Operator'} ·{' '}
-                    {c.operations.length} {c.operations.length === 1 ? 'document' : 'documents'}
+                    {c.authorId === 'operator'
+                      ? 'Operator'
+                      : (data.agents.find((a) => a.id === c.authorId)?.name ??
+                        short(c.authorId))}{' '}
+                    · {c.operationCount} {c.operationCount === 1 ? 'document' : 'documents'}
                   </small>
                 </div>
                 <Status value={c.status} />
               </button>
             ))
           ) : (
-            <Empty title="The review queue is clear">
-              Proposals appear here when an agent or operator submits a change.
+            <Empty
+              title={
+                data.counts.pendingChanges
+                  ? 'More changes await review'
+                  : 'The review queue is clear'
+              }
+            >
+              {data.counts.pendingChanges
+                ? 'Open Change sets to browse the review queue.'
+                : 'Proposals appear here when an agent or operator submits a change.'}
             </Empty>
           )}
+          <PageControls state={pages.changes} label="change sets" />
         </section>
         <section className="domains">
           <div className="section-head">
@@ -482,25 +542,15 @@ function Overview() {
                   <strong>{a.name}</strong>
                   <span>{a.domain}</span>
                 </div>
-                <small>
-                  {data.grants
-                    .filter(
-                      (g) =>
-                        g.agentId === a.id &&
-                        !g.revokedAt &&
-                        g.effect === 'allow' &&
-                        (!g.expiresAt || Date.parse(g.expiresAt) > Date.now()),
-                    )
-                    .map((g) => g.scope)
-                    .join(', ') || 'No access'}
-                </small>
+                <small>Inspect access policies</small>
               </div>
             ))}
-          {!data.agents.some((a) => !a.revokedAt) && (
+          {!pages.agents.loading && !data.counts.activeAgents && (
             <Empty title="No active agents">
               Register an identity, then grant a document scope.
             </Empty>
           )}
+          <PageControls state={pages.agents} label="agents" />
         </section>
       </div>
       <section className="recent-documents">
@@ -537,11 +587,12 @@ function Overview() {
             </tbody>
           </table>
         </div>
-        {!data.documents.length && (
+        {!data.counts.documents && (
           <Empty title="Your workspace is ready">
             Create your first document proposal from Documents.
           </Empty>
         )}
+        <PageControls state={pages.documents} label="documents" />
       </section>
       <div className="integration-note">
         <div>

@@ -27,6 +27,31 @@ export interface Grant {
   revokedAt: string | null;
   createdAt: string;
 }
+export interface AccessCheck {
+  path: string;
+  action: Action;
+}
+export interface AccessEvidence {
+  matchedGrantIds: string[];
+  ignoredGrants: { grantId: string; reason: 'revoked' | 'expired' }[];
+  truncated: boolean;
+}
+export interface AccessRequirement {
+  action: Action;
+  allowed: boolean;
+  reason: 'allow' | 'explicit_deny' | 'default_deny';
+  evidence?: AccessEvidence;
+}
+export interface AccessDecision extends AccessCheck {
+  allowed: boolean;
+  requirements: AccessRequirement[];
+}
+export interface AccessReport {
+  workspaceId: string;
+  agentId: string;
+  evaluatedAt: string;
+  decisions: AccessDecision[];
+}
 export interface Operation {
   path: string;
   baseRevision: string | null;

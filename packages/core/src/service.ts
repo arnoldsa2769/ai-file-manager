@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { openDatabase } from './database.js';
-import { allowed, canonicalPath } from './policy.js';
+import { actions, compilePolicy, canonicalPath } from './policy.js';
 import { idempotent } from './idempotency.js';
 import { readPage, validatePageOptions } from './pagination.js';
 import {
@@ -24,12 +24,14 @@ import {
   type Collections,
   type Page,
   type PageOptions,
+  type AccessCheck,
+  type AccessReport,
 } from './types.js';
 
 const now = () => new Date().toISOString();
 const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 const agentColumns = 'id, workspaceId, name, domain, provider, revokedAt, createdAt';
-type AccessCheck = (action: Action, path: string) => boolean;
+type AccessPredicate = (action: Action, path: string) => boolean;
 function fail(code: string, message: string, status = 400): never {
   throw new DomainError(code, message, status);
 }
@@ -122,15 +124,51 @@ export class WorkspaceService {
   private grants(wid: string, agentId: string): Grant[] {
     return this.all<Grant>('SELECT * FROM grants WHERE workspaceId=? AND agentId=?', wid, agentId);
   }
-  private access(p: Principal, wid: string): AccessCheck {
+  private access(p: Principal, wid: string): AccessPredicate {
     if (p.kind === 'operator') return () => true;
     const grants = this.grants(wid, p.id);
-    const evaluatedAt = new Date();
-    return (action, path) => allowed(grants, action, path, evaluatedAt);
+    return compilePolicy(grants).allows;
   }
-  private require(can: AccessCheck, action: Action, path: string): void {
+  private require(can: AccessPredicate, action: Action, path: string): void {
     if (!can(action, path))
       fail('FORBIDDEN', 'The requested document operation is not permitted.', 403);
+  }
+  checkAccess(p: Principal, wid: string, checks: AccessCheck[], agentId?: string): AccessReport {
+    this.workspace(p, wid);
+    if (p.kind === 'agent' && agentId !== undefined && agentId !== p.id)
+      fail('FORBIDDEN', 'Agents may inspect only their own authority.', 403);
+    const target = agentId ?? (p.kind === 'agent' ? p.id : undefined);
+    if (typeof target !== 'string' || !target || target.length > 200)
+      fail('INVALID_INPUT', 'Select an agent to inspect.');
+    this.activeAgent(wid, target);
+    if (!Array.isArray(checks) || checks.length < 1 || checks.length > 20)
+      fail('INVALID_INPUT', 'Provide 1-20 document access checks.');
+    for (const check of checks) {
+      if (!check || !actions.includes(check.action))
+        fail('INVALID_INPUT', 'Unknown document action.');
+      canonicalPath(check.path);
+    }
+    const grants = this.grants(wid, target);
+    const evaluatedAt = new Date();
+    const policy = compilePolicy(grants, evaluatedAt);
+    return {
+      workspaceId: wid,
+      agentId: target,
+      evaluatedAt: evaluatedAt.toISOString(),
+      decisions: checks.map((check) => {
+        const required: Action[] = check.action === 'read' ? ['read'] : ['read', check.action];
+        const requirements = required.map((action) => {
+          const { evidence, ...decision } = policy.explain(action, check.path);
+          return p.kind === 'operator' ? { ...decision, evidence } : decision;
+        });
+        return {
+          path: check.path,
+          action: check.action,
+          allowed: requirements.every((r) => r.allowed),
+          requirements,
+        };
+      }),
+    };
   }
   authenticateAgent(token: string): Principal | null {
     const agent = this.one<Agent>(

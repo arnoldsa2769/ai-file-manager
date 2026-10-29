@@ -44,7 +44,11 @@ Tasks have `open`, `in_progress`, or `done` status and one active assignee. Agen
 
 ## Retry behavior
 
-Reads can be retried after a transport failure. Mutation endpoints do not yet support idempotency keys. If a proposal request times out, inspect owned changes before resubmitting; the first request may have committed. After an apply timeout, inspect the proposal state and current documents. Never automatically approve a replacement based on an earlier proposal's approval.
+Reads can be retried after a transport failure. Proposal creation and operator apply support optional `Idempotency-Key`. Generate a key before sending, retain the key and exact request for ambiguous failures, and resend with that same key. The service commits the response receipt and mutation together. Replays survive restart and do not append another proposal, revision, or mutation event. Current identity and proposal authority are checked again before replay.
+
+The response is the original successful snapshot, not a live resource read. After an apply timeout, replay with the same key, then read the proposal and document heads for current state. A different payload or target with an already-used key returns `IDEMPOTENCY_CONFLICT`; use a new key only for genuinely new work. Automatic retries are not enabled in the SDK or MCP bridge.
+
+Unkeyed writes and all other mutation endpoints remain ambiguous after a transport failure. Inspect state before retrying them. Never automatically approve a replacement based on an earlier proposal's approval. Keys do not freeze grants, bypass approval, or turn a conflicted proposal into an approved replacement.
 
 ## Model independence
 

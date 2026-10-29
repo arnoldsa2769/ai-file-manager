@@ -49,3 +49,17 @@ The operator is trusted and can read every local workspace. Giving an agent the 
 Paths must start with `/`, contain well-formed normalized Unicode, and fit 512 JavaScript string units. Reject empty or dot segments, trailing separators, control characters, backslashes, percent-encoded aliases, and root as a document name. Scopes may use `/`.
 
 These are virtual identifiers. No path is joined to a host directory. A future filesystem adapter needs separate confinement, symlink, race, and recovery defenses.
+
+## Pages and retry receipts
+
+Metadata pagination applies the same live workspace, read, ownership, and task-assignment checks as the corresponding list. Identities, grants, activity, and summary counts remain operator-only. Cursors convey navigation context, never authority; newly revoked grants affect subsequent pages. A sparse page can be empty while navigation continues.
+
+Proposal receipt replays re-authenticate the request and recheck current read/write/delete grants on every submitted path before returning saved content. A key never extends access lifetime. Completed application receipt replays require the operator and return the completed response without another write; they do not reapply a change under stale author grants.
+
+## Effective access inspection
+
+`POST /v1/workspaces/:workspaceId/access/check` evaluates 1-20 canonical document path/action pairs against the same compiled evaluator used by enforcement. It does not look up document existence or bodies, append activity, or alter grants. Agents may inspect only their authenticated identity. The operator must select an active agent from the same workspace.
+
+A read decision requires `read`. Write, delete, and review decisions require both `read` and the requested primitive action. Each requirement reports `allow`, `explicit_deny`, or `default_deny`. Operator evidence lists at most 20 matched grant IDs and 20 ignored revoked/expired grants per requirement, with a truncation flag. Decisions still use all applicable grants. Agent reports omit evidence entirely.
+
+The Permissions inspector uses this endpoint, including grants beyond the currently loaded table page. Changing the agent or path hides the previous report; refresh recomputes current policy. A preview creates no capability, does not reserve authority, and may become stale immediately. Actual operations independently enforce ownership, existence, revision, approval, and current policy requirements. Hypothetical rule simulation and delegated/task-bound grants remain future work.

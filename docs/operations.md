@@ -47,12 +47,25 @@ Automated tests reopen a backup and verify committed content/history. They do no
 
 ## Schema and upgrades
 
-The application creates schema version 1 on an empty database and refuses a newer schema version. There are no upgrade migrations yet. Back up before changing application revisions; future schema changes need explicit migration and rollback instructions.
+The application creates schema version 2 on an empty database. Opening a version-1 database performs an additive transaction that creates the idempotency table and collection indexes, advances the version only after success, and preserves documents, revisions, identities, and grants. Unknown newer versions are rejected.
+
+Before updating an existing installation:
+
+1. Make a consistent backup with the existing application and retain its configuration and source revision.
+2. Stop the service and install/build the new revision using the lockfile.
+3. Start the new service against the same private data directory. Migration runs during database opening; a failed migration must be resolved before serving requests.
+4. Check `/health`, authenticate, inspect summary counts and selected history, and confirm representative agent scopes.
+
+There is no destructive down-migration. To roll back, stop the service, preserve the schema-2 database, restore the pre-upgrade backup to a fresh private directory, and run the previous revision against that directory. Writes after the backup are not present in that restored copy. Old binaries reject schema 2 rather than silently reading an unsupported schema.
 
 ## Logs and retention
 
-HTTP request logging is disabled to avoid credential/body disclosure. The activity table records successful mutations. Its administrative view returns the latest 200 entries, but storage retention is currently unbounded. Establish workspace-size limits operationally until quotas and retention are implemented.
+HTTP request logging is disabled to avoid credential/body disclosure. The activity table records successful mutations. The console browses activity in bounded pages; the legacy overview still returns its latest 200 entries. Storage retention is currently unbounded. Establish workspace-size limits operationally until quotas and retention are implemented.
 
 ## Platform assumptions
 
 Node.js >=22.13 on macOS or Linux is the initial target. POSIX private file modes are required by local setup and database initialization. Windows ACL equivalence, Docker networking, hosted concurrency, and network filesystems have not been validated.
+
+## Retry receipt storage
+
+Successful keyed proposal/apply responses are private data stored in the same database and included in backups. Only key digests are stored, but response snapshots can contain document text. Keys remain reserved across restart; there is no automatic expiry or pruning command. Do not delete receipt rows ad hoc: a late retry could execute again. Size limits, retention, and coordinated export require an operator policy beyond this alpha.

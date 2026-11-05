@@ -119,3 +119,19 @@ for (const decision of report.decisions) console.log(decision.allowed, decision.
 ```
 
 Agent clients omit the optional third `agentId` parameter or select themselves. Operator clients must provide an active workspace-local agent ID as that parameter. The MCP `check_access` tool accepts only `checks` (1-20 path/action pairs), so tools cannot switch the configured identity. Only operator reports contain grant evidence. Write/delete/review decisions require read plus the requested action. This is a current-policy preview, not approval: document existence, proposal ownership, content validation, revision heads, and live application checks still apply. See the [API contract](api.md#effective-access-inspection).
+
+## Bounded advisory review notes
+
+```typescript
+let reviewCursor: string | undefined;
+do {
+  const page = await client.reviewPage(workspaceId, changeId, {
+    limit: 25,
+    cursor: reviewCursor,
+  });
+  for (const note of page.items) console.log(note.authorId, note.body);
+  reviewCursor = page.nextCursor ?? undefined;
+} while (reviewCursor !== undefined);
+```
+
+`reviewPage` accepts only `limit` and `cursor`, returns full note bodies newest first, and rechecks current proposal visibility on each call. `client.page(workspaceId, 'reviews', { changeSetId: changeId, limit: 25 })` is the equivalent generic entry point. An agent can read its own proposal notes with read authority on all affected paths; reading another agent's notes also needs review authority. Cursors are navigation context, not capabilities. Start a fresh traversal after adding a note with `client.review` to see the new note. There is no automatic retry and the ten existing MCP tools are unchanged. Legacy HTTP review arrays remain oldest first and unbounded.

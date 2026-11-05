@@ -5,8 +5,10 @@ import type { PageState } from './pages.js';
 export type View =
   'Overview' | 'Documents' | 'Agents' | 'Permissions' | 'Change sets' | 'Tasks' | 'Activity';
 export interface ConsoleState {
-  data: WorkspaceSummary & { [K in Exclude<keyof Collections, 'history'>]: Collections[K][] };
-  pages: { [K in Exclude<keyof Collections, 'history'>]: PageState<Collections[K]> };
+  data: WorkspaceSummary & {
+    [K in Exclude<keyof Collections, 'history' | 'reviews'>]: Collections[K][];
+  };
+  pages: { [K in Exclude<keyof Collections, 'history' | 'reviews'>]: PageState<Collections[K]> };
   generation: number;
   documentQuery: string;
   setDocumentQuery: (query: string) => void;

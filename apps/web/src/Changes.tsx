@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ChangeSet, Review, Revision } from '../../../packages/core/src/types.js';
+import type { ChangeSet, Revision } from '../../../packages/core/src/types.js';
 import {
   Empty,
   ErrorMessage,
@@ -11,6 +11,7 @@ import {
   useConsole,
 } from './components.js';
 import { useResource } from './pages.js';
+import { ReviewNotes } from './ReviewNotes.js';
 export function Changes() {
   const {
     data,
@@ -103,8 +104,6 @@ function ChangeDetail({ change }: { change: ChangeSet }) {
   const { client, wid, data, run, busy, generation } = useConsole();
   const applyKey = useRef(crypto.randomUUID());
   const [bases, setBases] = useState<Record<string, Revision | undefined>>({});
-  const [reviews, setReviews] = useState<Review[]>([]);
-  const [note, setNote] = useState('');
   const [error, setError] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -112,21 +111,17 @@ function ChangeDetail({ change }: { change: ChangeSet }) {
     let active = true;
     setLoaded(false);
     setError('');
-    void Promise.all([
-      Promise.all(
-        change.operations.map(async (op) => ({
-          path: op.path,
-          revision: op.baseRevision
-            ? await client.revision(wid, op.path, op.baseRevision)
-            : undefined,
-        })),
-      ),
-      client.request<Review[]>('GET', `/v1/workspaces/${wid}/changes/${change.id}/reviews`),
-    ])
-      .then(([history, notes]) => {
+    void Promise.all(
+      change.operations.map(async (op) => ({
+        path: op.path,
+        revision: op.baseRevision
+          ? await client.revision(wid, op.path, op.baseRevision)
+          : undefined,
+      })),
+    )
+      .then((history) => {
         if (active) {
           setBases(Object.fromEntries(history.map((x) => [x.path, x.revision])));
-          setReviews(notes);
           setLoaded(true);
         }
       })
@@ -239,54 +234,7 @@ function ChangeDetail({ change }: { change: ChangeSet }) {
         )}
         <p className="muted">Application rechecks permissions and base revisions.</p>
       </div>
-      <section className="reviews">
-        <h2>Review notes</h2>
-        {reviews.map((review) => (
-          <article key={review.id}>
-            <div>
-              <strong>
-                {review.authorId === 'operator'
-                  ? 'Operator'
-                  : (data.agents.find((a) => a.id === review.authorId)?.name ??
-                    short(review.authorId))}
-              </strong>
-              <small>{timestamp(review.createdAt)}</small>
-            </div>
-            <p>{review.body}</p>
-          </article>
-        ))}
-        {!reviews.length && (
-          <p className="muted">No review notes yet. Agent reviews are advisory.</p>
-        )}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            void run(async () => {
-              await client.review(wid, change.id, note);
-              setReviews(
-                await client.request<Review[]>(
-                  'GET',
-                  `/v1/workspaces/${wid}/changes/${change.id}/reviews`,
-                ),
-              );
-              setNote('');
-            }, 'Review note added.');
-          }}
-        >
-          <Field label="Review note">
-            <textarea
-              value={note}
-              required
-              maxLength={4000}
-              onChange={(e) => setNote(e.target.value)}
-              rows={3}
-            />
-          </Field>
-          <button className="secondary" disabled={busy || !note.trim()}>
-            Add review note
-          </button>
-        </form>
-      </section>
+      <ReviewNotes changeId={change.id} />
     </>
   );
 }

@@ -14,6 +14,7 @@ AI File Manager explores how independent AI tools can collaborate on documents w
 - Enforce default-deny access, explicit deny rules, expiration, and revocation.
 - Explain effective access with self-only agent preflight and operator rule evidence.
 - Accept immutable multi-document proposals instead of unrestricted direct writes.
+- Browse advisory review notes in bounded pages, with live proposal permissions and explicit retries.
 - Separate advisory agent reviews from human approval and application.
 - Recheck current authority and revision heads before an atomic transaction.
 - Preserve revisions and deletion tombstones; restore through new proposals.

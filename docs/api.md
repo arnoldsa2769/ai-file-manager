@@ -26,6 +26,7 @@ Paths below omit the `/v1` prefix. `:workspaceId` and `:id` are path parameters.
 | POST   | /workspaces/:workspaceId/changes/:id/approve              | Approve pending proposal; operator only                       |
 | POST   | /workspaces/:workspaceId/changes/:id/reject               | Reject pending/approved proposal; operator only               |
 | POST   | /workspaces/:workspaceId/changes/:id/apply                | Revalidate and atomically apply; operator only                |
+| GET    | /workspaces/:workspaceId/changes/:id/reviews/page         | Bounded permitted review notes; `limit`, `cursor`             |
 | GET    | /workspaces/:workspaceId/changes/:id/reviews              | Inspect permitted review notes                                |
 | POST   | /workspaces/:workspaceId/changes/:id/reviews              | Add advisory note: `{body}`                                   |
 | GET    | /workspaces/:workspaceId/tasks                            | Operator: all; agent: assigned tasks                          |
@@ -186,3 +187,31 @@ See [retry guidance](collaboration-protocol.md) for keyed and unkeyed mutations.
 Evidence appears only for operators. `ignoredGrants` entries have `grantId` and `reason` (`revoked` or `expired`). Evidence caps each list at 20 entries per requirement and sets `truncated` if more match. All applicable rules contribute to the decision. Reasons are `allow`, `explicit_deny`, and `default_deny`. Read has one requirement; write/delete/review require read and the requested action.
 
 This preview grants no authority and performs no persistence or audit mutation. It does not check document existence, proposal ownership, revision heads, approval, or content validity. Recheck the actual operation; expiry and revocation remain live.
+
+## Review-note pages
+
+`GET /v1/workspaces/:workspaceId/changes/:id/reviews/page?limit=25` returns:
+
+```json
+{
+  "items": [
+    {
+      "id": "review-id",
+      "workspaceId": "workspace-id",
+      "changeSetId": "proposal-id",
+      "authorId": "operator",
+      "body": "Advisory review findings.",
+      "createdAt": "2026-11-06T00:00:00.000Z"
+    }
+  ],
+  "nextCursor": null
+}
+```
+
+Only `limit` and `cursor` query parameters are accepted. The default limit is 25 and the range is 1-100. An empty proposal returns an empty array and null cursor. Full note bodies are included, each limited to 4000 characters at creation. Each page materializes at most `limit + 1` review rows using the existing workspace/proposal index. Responses are authenticated and use `Cache-Control: no-store`.
+
+Notes are newest first by insertion sequence. Pass `nextCursor` unchanged until null; limits may change between pages. A first-page insertion watermark excludes notes added later from continuation; start without a cursor to see new notes. Cursors are bound to the exact proposal, workspace, principal, and collection. Malformed or mismatched cursors return `400 INVALID_INPUT` and never authorize access.
+
+Each page rechecks the active identity and current access to every proposal path. Authors need read authority; another agent needs both read and review; the operator retains full access. Revocation, expiry, or a new explicit deny can prevent continuation. Notes remain advisory and do not certify approval or application eligibility. This read performs no audit or persistence mutation.
+
+The existing `GET /changes/:id/reviews` route remains a full oldest-first array for compatibility. The operator console uses only the page route, resets after refresh or note submission, and isolates note failures from exact revision loading. Workspace discovery and legacy full lists remain unbounded.

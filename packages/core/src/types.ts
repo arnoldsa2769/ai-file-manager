@@ -128,7 +128,12 @@ export interface Overview {
 export type DocumentMetadata = Omit<Document, 'content'>;
 export type RevisionMetadata = Omit<Revision, 'content'>;
 export type ChangeMetadata = Omit<ChangeSet, 'operations'> & { operationCount: number };
+export interface ReviewPageOptions {
+  limit?: number;
+  cursor?: string;
+}
 export interface Collections {
+  reviews: Review;
   documents: DocumentMetadata;
   changes: ChangeMetadata;
   history: RevisionMetadata;
@@ -143,6 +148,7 @@ export interface Page<T> {
   nextCursor: string | null;
 }
 export interface PageOptions {
+  changeSetId?: string;
   limit?: number;
   cursor?: string;
   query?: string;

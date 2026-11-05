@@ -295,6 +295,22 @@ export async function createApp(options: AppOptions) {
           }
           return s[action](r.principal, p.workspaceId, p.id);
         });
+      api.get('/workspaces/:workspaceId/changes/:id/reviews/page', async (r) => {
+        const p = params(r.params);
+        const options = z
+          .object({
+            limit: z
+              .string()
+              .regex(/^[0-9]+$/)
+              .transform(Number)
+              .pipe(z.number().int().min(1).max(100))
+              .optional(),
+            cursor: z.string().min(1).max(1024).optional(),
+          })
+          .strict()
+          .parse(r.query);
+        return s.page(r.principal, p.workspaceId, 'reviews', { ...options, changeSetId: p.id });
+      });
       api.get('/workspaces/:workspaceId/changes/:id/reviews', async (r) => {
         const p = params(r.params);
         return s.listReviews(r.principal, p.workspaceId, p.id);

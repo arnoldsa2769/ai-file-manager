@@ -4,6 +4,7 @@ import type {
   Operation,
   Principal,
   Review,
+  ReviewPageOptions,
   Revision,
   Task,
   Workspace,
@@ -99,6 +100,11 @@ export class WorkspaceClient {
     });
   }
   page<K extends Collection>(wid: string, collection: K, options: PageOptions = {}) {
+    if (collection === 'reviews') {
+      const { changeSetId, ...reviewOptions } = options;
+      if (!changeSetId) throw new Error('Review pages require a changeSetId.');
+      return this.reviewPage(wid, changeSetId, reviewOptions) as Promise<Page<Collections[K]>>;
+    }
     const query = new URLSearchParams(
       Object.entries(options)
         .filter(([, value]) => value !== undefined)
@@ -151,6 +157,17 @@ export class WorkspaceClient {
   }
   change(wid: string, id: string) {
     return this.request<ChangeSet>('GET', `${this.root(wid)}/changes/${encodeURIComponent(id)}`);
+  }
+  reviewPage(wid: string, id: string, options: ReviewPageOptions = {}) {
+    const query = new URLSearchParams(
+      Object.entries(options)
+        .filter(([, value]) => value !== undefined)
+        .map(([key, value]): [string, string] => [key, String(value)]),
+    );
+    return this.request<Page<Review>>(
+      'GET',
+      `${this.root(wid)}/changes/${encodeURIComponent(id)}/reviews/page?${query}`,
+    );
   }
   review(wid: string, id: string, body: string) {
     return this.request<Review>(

@@ -1,5 +1,169 @@
 import { test, expect, type APIRequestContext } from '@playwright/test';
 const token = 'browser-test-operator-token-at-least-24';
+async function reviewPageFixture(request: APIRequestContext) {
+  const headers = { Authorization: `Bearer ${token}` };
+  const base = 'http://127.0.0.1:17310/v1/workspaces';
+  const workspace = await (
+    await request.post(base, { headers, data: { name: 'Paged review workflow' } })
+  ).json();
+  const root = `${base}/${workspace.id}/changes`;
+  async function propose(title: string) {
+    return (
+      await request.post(root, {
+        headers,
+        data: {
+          title,
+          operations: [{ path: '/draft.md', baseRevision: null, content: 'Proposed text' }],
+        },
+      })
+    ).json();
+  }
+  const first = await propose('First review proposal');
+  const second = await propose('Second review proposal');
+  for (let n = 0; n < 30; n++)
+    await request.post(`${root}/${first.id}/reviews`, {
+      headers,
+      data: { body: `Review note ${String(n).padStart(2, '0')}` },
+    });
+  await request.post(`${root}/${second.id}/reviews`, {
+    headers,
+    data: { body: 'Only second proposal note' },
+  });
+  return { workspace, first, second };
+}
+async function openReviews(page: import('@playwright/test').Page, workspaceId: string) {
+  await page.goto('/');
+  await page.getByLabel('Operator token').fill(token);
+  await page.getByRole('button', { name: 'Connect workspace' }).click();
+  await page.getByLabel('Active workspace').selectOption(workspaceId);
+  await page.getByRole('button', { name: 'Change sets', exact: true }).click();
+  await page.getByRole('button', { name: /First review proposal/ }).click();
+}
+test('review notes load bounded pages, retry continuation and refresh after submission', async ({
+  page,
+  request,
+}) => {
+  const f = await reviewPageFixture(request);
+  const reads: string[] = [];
+  page.on('request', (r) => {
+    if (new URL(r.url()).pathname.includes('/reviews')) reads.push(r.url());
+  });
+  let failMore = true;
+  await page.route('**/reviews/page?*', async (route) => {
+    if (new URL(route.request().url()).searchParams.has('cursor') && failMore)
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: { code: 'UNAVAILABLE', message: 'Review continuation unavailable.' },
+        }),
+      });
+    else await route.continue();
+  });
+  await openReviews(page, f.workspace.id);
+  const notes = page.getByRole('region', { name: 'Review notes', exact: true });
+  await expect(notes.getByRole('article')).toHaveCount(25);
+  await expect(notes.getByRole('article').first()).toContainText('Review note 29');
+  await expect(notes).not.toContainText('Review note 00');
+  expect(reads.every((url) => new URL(url).pathname.endsWith('/reviews/page'))).toBe(true);
+  await notes.getByRole('button', { name: 'Load more review notes', exact: true }).click();
+  await expect(notes.getByRole('alert')).toContainText('Review continuation unavailable.');
+  await expect(notes.getByRole('article')).toHaveCount(25);
+  failMore = false;
+  await notes.getByRole('button', { name: 'Retry more review notes', exact: true }).click();
+  await expect(notes.getByRole('article')).toHaveCount(30);
+  await expect(notes.getByRole('article').last()).toContainText('Review note 00');
+  await notes.getByLabel('Review note', { exact: true }).fill('Newly submitted review note');
+  await notes.getByRole('button', { name: 'Add review note', exact: true }).click();
+  await expect(notes.getByRole('article')).toHaveCount(25);
+  await expect(notes.getByRole('article').first()).toContainText('Newly submitted review note');
+  await expect(notes.getByLabel('Review note', { exact: true })).toHaveValue('');
+  await page.screenshot({ path: 'test-results/review-pages-desktop.png', fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/review-pages-mobile.png', fullPage: true });
+});
+test('review notes failures retry independently from proposal approval', async ({
+  page,
+  request,
+}) => {
+  const f = await reviewPageFixture(request);
+  let recover = false;
+  await page.route('**/reviews/page?*', async (route) => {
+    if (!recover)
+      await route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: { code: 'UNAVAILABLE', message: 'Review notes unavailable.' },
+        }),
+      });
+    else await route.continue();
+  });
+  await openReviews(page, f.workspace.id);
+  const notes = page.getByRole('region', { name: 'Review notes', exact: true });
+  await expect(notes.getByRole('alert')).toContainText('Review notes unavailable.');
+  await expect(page.getByRole('button', { name: 'Approve change', exact: true })).toBeEnabled();
+  await expect(notes).not.toContainText('No review notes yet');
+  recover = true;
+  await notes.getByRole('button', { name: 'Retry review notes', exact: true }).click();
+  await expect(notes.getByRole('article')).toHaveCount(25);
+});
+test('late review continuations cannot enter another selected proposal or a refreshed traversal', async ({
+  page,
+  request,
+}) => {
+  const f = await reviewPageFixture(request);
+  let release!: () => void;
+  let reached!: () => void;
+  let delayed = new Promise<void>((r) => {
+    release = r;
+  });
+  let requested = new Promise<void>((r) => {
+    reached = r;
+  });
+  await page.route('**/reviews/page?*', async (route) => {
+    if (new URL(route.request().url()).searchParams.has('cursor')) {
+      const response = await route.fetch();
+      reached();
+      await delayed;
+      await route.fulfill({ response });
+    } else await route.continue();
+  });
+  await openReviews(page, f.workspace.id);
+  const notes = page.getByRole('region', { name: 'Review notes', exact: true });
+  await expect(notes.getByRole('article')).toHaveCount(25);
+  await notes.getByRole('button', { name: 'Load more review notes', exact: true }).click();
+  await requested;
+  await page.getByRole('button', { name: /Second review proposal/ }).click();
+  await expect(notes).toContainText('Only second proposal note');
+  let late = page.waitForResponse(
+    (r) => new URL(r.url()).searchParams.has('cursor') && r.url().includes('/reviews/page'),
+  );
+  release();
+  await (await late).finished();
+  await expect(notes.getByRole('article')).toHaveCount(1);
+  await expect(notes).not.toContainText('Review note 00');
+  await page.getByRole('button', { name: /First review proposal/ }).click();
+  await expect(notes.getByRole('article')).toHaveCount(25);
+  delayed = new Promise<void>((r) => {
+    release = r;
+  });
+  requested = new Promise<void>((r) => {
+    reached = r;
+  });
+  await notes.getByRole('button', { name: 'Load more review notes', exact: true }).click();
+  await requested;
+  await page.getByRole('button', { name: 'Refresh', exact: true }).click();
+  await expect(notes.getByRole('article')).toHaveCount(25);
+  late = page.waitForResponse(
+    (r) => new URL(r.url()).searchParams.has('cursor') && r.url().includes('/reviews/page'),
+  );
+  release();
+  await (await late).finished();
+  await expect(notes.getByRole('article')).toHaveCount(25);
+});
+
 async function accessFixture(request: APIRequestContext) {
   const headers = { Authorization: `Bearer ${token}` };
   const base = 'http://127.0.0.1:17310/v1/workspaces';

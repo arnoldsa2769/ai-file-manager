@@ -11,6 +11,7 @@ import {
 } from './types.js';
 
 const columns: Record<Collection, { table: string; select: string }> = {
+  reviews: { table: 'reviews', select: 'id,workspaceId,changeSetId,authorId,body,createdAt' },
   documents: { table: 'documents', select: 'workspaceId,path,currentRevision,deleted,updatedAt' },
   changes: {
     table: 'changes',
@@ -47,6 +48,7 @@ export function validatePageOptions(collection: Collection, options: PageOptions
     ...(collection === 'documents' ? ['query', 'includeDeleted'] : []),
     ...(collection === 'changes' ? ['status'] : []),
     ...(collection === 'history' ? ['path'] : []),
+    ...(collection === 'reviews' ? ['changeSetId'] : []),
   ];
   if (Object.entries(options).some(([k, v]) => v !== undefined && !permitted.includes(k)))
     invalid();
@@ -70,6 +72,14 @@ export function validatePageOptions(collection: Collection, options: PageOptions
   )
     invalid();
   if (collection === 'history' && typeof options.path !== 'string') invalid();
+  if (
+    collection === 'reviews' &&
+    (typeof options.changeSetId !== 'string' ||
+      !options.changeSetId ||
+      options.changeSetId.length > 200 ||
+      !options.changeSetId.isWellFormed())
+  )
+    invalid();
 }
 
 export function readPage<K extends Collection>(
@@ -93,6 +103,7 @@ export function readPage<K extends Collection>(
         options.status ?? '',
         options.path ?? '',
         options.includeDeleted ?? false,
+        ...(collection === 'reviews' ? [options.changeSetId] : []),
       ]),
     )
     .digest('hex');
@@ -114,6 +125,10 @@ export function readPage<K extends Collection>(
       where.push('authorId=?');
       values.push(principal.id);
     }
+  }
+  if (collection === 'reviews') {
+    where.push('changeSetId=?');
+    values.push(options.changeSetId!);
   }
   if (collection === 'history') {
     where.push('path=?');
@@ -149,16 +164,23 @@ export function readPage<K extends Collection>(
     } else {
       upper = (
         db
-          .prepare(`SELECT COALESCE(MAX(rowid),0) AS n FROM ${table} WHERE workspaceId=?`)
-          .get(workspaceId) as { n: number }
+          .prepare(
+            `SELECT COALESCE(MAX(rowid),0) AS n FROM ${table} WHERE ${collection === 'reviews' ? where.join(' AND ') : 'workspaceId=?'}`,
+          )
+          .get(...(collection === 'reviews' ? values : [workspaceId])) as { n: number }
       ).n;
       after = upper + 1;
     }
     const rows = db
       .prepare(
-        `SELECT rowid AS sequence,${select} FROM ${table} WHERE ${where.join(' AND ')} AND rowid<=? AND rowid<? ORDER BY rowid DESC LIMIT 500`,
+        `SELECT rowid AS sequence,${select} FROM ${table} WHERE ${where.join(' AND ')} AND rowid<=? AND rowid<? ORDER BY rowid DESC LIMIT ?`,
       )
-      .all(...values, upper!, after!) as Record<string, unknown>[];
+      .all(
+        ...values,
+        upper!,
+        after!,
+        collection === 'reviews' ? (options.limit ?? 25) + 1 : 500,
+      ) as Record<string, unknown>[];
     const items: Collections[K][] = [];
     let last = after!;
     for (const row of rows) {

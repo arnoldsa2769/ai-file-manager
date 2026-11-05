@@ -69,3 +69,7 @@ Node.js >=22.13 on macOS or Linux is the initial target. POSIX private file mode
 ## Retry receipt storage
 
 Successful keyed proposal/apply responses are private data stored in the same database and included in backups. Only key digests are stored, but response snapshots can contain document text. Keys remain reserved across restart; there is no automatic expiry or pruning command. Do not delete receipt rows ad hoc: a late retry could execute again. Size limits, retention, and coordinated export require an operator policy beyond this alpha.
+
+## Review-note read budgets
+
+The nested review page API defaults to 25 notes and caps requests at 100. It loads at most limit + 1 review rows per request and uses the existing `reviews_change` index; no new migration or dependency is required. The console uses that route and exposes continuation and retry controls. Note submission and refresh start a new traversal so new notes appear first. This bounds a request, not total retention or overall workspace size. Workspace discovery and legacy full list routes, including the oldest-first review array, remain unbounded. Review bodies remain limited to 4000 characters each.

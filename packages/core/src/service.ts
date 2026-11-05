@@ -619,6 +619,10 @@ export class WorkspaceService {
     this.workspace(p, wid);
     if (['agents', 'grants', 'activity'].includes(collection)) this.admin(p);
     validatePageOptions(collection, options);
+    if (collection === 'reviews') {
+      this.getChange(p, wid, options.changeSetId!);
+      return readPage(this.db, p, wid, collection, options, () => true);
+    }
     const can = this.access(p, wid);
     if (collection === 'history') {
       canonicalPath(options.path!);
